@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lode Runner</title>
+  <style>
+    :root {
+      --bg: #0a0a0a;
+      --fg: #eaeaea;
+      --muted: #888;
+      --accent: #ff7755;
+      --player: #fff0a8;
+      --runner: #ff5544;
+      --grunter: #b07aff;
+      --gold: #ffcc33;
+      --brick: #c87850;
+      --solid: #555;
+      --ladder: #fdba35;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      background: var(--bg);
+      color: var(--fg);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Mono", "Menlo",
+        "Courier New", monospace;
+      height: 100%;
+    }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    .stage {
+      position: relative;
+      width: min(800px, 100vmin);
+      height: min(800px, 100vmin);
+      aspect-ratio: 1 / 1;
+    }
+    #game {
+      display: block;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      image-rendering: pixelated;
+    }
+    .overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.7);
+      transition: opacity 0.15s ease-out;
+      pointer-events: none;
+    }
+    .overlay.hidden {
+      opacity: 0;
+    }
+    .overlay-inner {
+      text-align: center;
+      max-width: 80%;
+    }
+    .overlay h1 {
+      font-size: clamp(36px, 6vmin, 60px);
+      letter-spacing: 0.15em;
+      font-weight: 400;
+      margin-bottom: 0.6em;
+      color: #fff;
+    }
+    .overlay h2 {
+      font-size: clamp(24px, 4vmin, 40px);
+      letter-spacing: 0.1em;
+      font-weight: 400;
+      margin-bottom: 0.6em;
+      color: #ffcc33;
+    }
+    .overlay p {
+      margin: 0.6em 0;
+      color: var(--muted);
+      font-size: clamp(13px, 1.8vmin, 16px);
+    }
+    .hints {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 1.2em;
+      margin-top: 1em;
+      color: var(--muted);
+      font-size: clamp(11px, 1.5vmin, 14px);
+    }
+    .hints span { display: inline-flex; align-items: center; gap: 0.4em; }
+    .hud {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      right: 8px;
+      pointer-events: none;
+      display: flex;
+      justify-content: space-between;
+      font-size: clamp(11px, 1.4vmin, 13px);
+      color: var(--muted);
+    }
+    kbd {
+      display: inline-block;
+      padding: 2px 6px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 2px;
+      font-family: inherit;
+      color: #fff;
+    }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <canvas id="game" width="512" height="512" aria-label="Lode Runner game canvas"></canvas>
+    <div class="hud" id="hud">
+      <span id="gold-count">GOLD: 0</span>
+      <span id="status">PLAY</span>
+    </div>
+    <div class="overlay" id="overlay">
+      <div class="overlay-inner" id="overlay-content">
+        <h1>Lode Runner</h1>
+        <p>Collect all the gold. Reach the top. Don't get caught.</p>
+        <p class="hints">
+          <span><kbd>&larr;</kbd> <kbd>&rarr;</kbd> Run</span>
+          <span><kbd>&uarr;</kbd> <kbd>&darr;</kbd> Climb</span>
+          <span><kbd>Z</kbd> Dig left</span>
+          <span><kbd>X</kbd> Dig right</span>
+        </p>
+        <p class="hints" style="margin-top:1em"><kbd>SPACE</kbd> Start / Restart</p>
+      </div>
+    </div>
+  </div>
+  <script src="game.js"></script>
+</body>
+</html>
