@@ -67,7 +67,7 @@ def main() -> int:
 
         # 3. Gold count is correct
         gold = page.evaluate("window.__loderunner.getGold()")
-        assert gold == {"collected": 0, "total": 6}, f"Expected 6 gold pieces, got {gold!r}"
+        assert gold == {"collected": 0, "total": 11}, f"Expected 11 gold pieces, got {gold!r}"
         print(f"  ✓ gold count = {gold['collected']}/{gold['total']}")
 
         # 4. Player can dig a brick
@@ -92,12 +92,11 @@ def main() -> int:
             }
             return result;
         }""")
-        assert len(gold_positions) == 6, f"Expected 6 gold pieces in level, got {len(gold_positions)}"
-        # Pickup the first gold
+        assert len(gold_positions) == 11, f"Expected 11 gold pieces in level, got {len(gold_positions)}"
+        # Pickup the first gold (single JS call to avoid update-loop race)
         target = gold_positions[0]
-        page.evaluate(f"window.__loderunner.setPlayerAt({target['col']}, {target['row']})")
         picked = page.evaluate(
-            "(args) => { window.__loderunner.setPlayerAt(args.col, args.row); return window.__loderunner.pickupGold(); }",
+            "(args) => window.__loderunner.pickupGold(args.col, args.row)",
             {"col": target["col"], "row": target["row"]},
         )
         assert picked is True, f"Pickup at gold position should succeed, got {picked!r}"

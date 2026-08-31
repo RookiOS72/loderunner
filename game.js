@@ -38,7 +38,7 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
   const T_RUNNER_SPAWN  = 7;
   const T_GRUNTER_SPAWN = 8;
 
-  const PLAYER_SPEED       = 55;   // px/s (was 80 — too fast per Brenden)
+  const PLAYER_SPEED       = 30;   // px/s (was 80 — too fast per Brenden)
   const PLAYER_CLIMB_SPEED = 50;
   const PLAYER_FALL_SPEED  = 200;
   const DIG_RECHARGE_MS    = 350;
@@ -71,16 +71,16 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
     "  L                            L ",   // row 7  exit ladders top
     "  L                            L ",   // row 8
     "  L                            L ",   // row 9
-    "  L          g                 L ",   // row 10 gold near left ladder
-    "  L                            L ",   // row 11
+    "  L                            L ",   // row 10 (no gold - was floating)
+    "  Lg     g      g    g     gL ",   // row 11 gold on top of row 12 bricks
     "  ##  ######  ######  ######  ## ",   // row 12 main brick row
     "  L                            L ",   // row 13
     "  L                            L ",   // row 14
-    "  L   g         E          g   L ",   // row 15 gold + exit
+    "  L          g  E          g L ",   // row 15 gold above dig target + exit
     "  L           #               L ",   // row 16 single dig target
     "  L                            L ",   // row 17
-    "  L   g         g         g   L ",   // row 18 gold spread
-    "  L                            L ",   // row 19
+    "  L                            L ",   // row 18 (no gold - was floating)
+    "  L     g  g          g    g L ",   // row 19 gold above row 20 bricks
     "R ##  ######  ######  ######  ## ",   // row 20 main brick row (bottom)
     "  L                            L ",   // row 21 player spawn (ladders go down to here)
   ];
@@ -652,9 +652,13 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
       player.col = col; player.row = row;
       player.x = col * TILE + TILE / 2; player.y = row * TILE + TILE / 2;
     },
-    pickupGold: () => {
-      if (tileAt(player.col, player.row) === T_GOLD) {
-        setTile(player.col, player.row, T_EMPTY);
+    pickupGold: (col, row) => {
+      // Accept explicit col/row to avoid race with player motion between
+      // setPlayerAt and pickupGold calls.
+      if (col === undefined) col = player.col;
+      if (row === undefined) row = player.row;
+      if (tileAt(col, row) === T_GOLD) {
+        setTile(col, row, T_EMPTY);
         player.goldCollected++;
         return true;
       }
