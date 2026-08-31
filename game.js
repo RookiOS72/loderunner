@@ -38,7 +38,7 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
   const T_RUNNER_SPAWN  = 7;
   const T_GRUNTER_SPAWN = 8;
 
-  const PLAYER_SPEED       = 30;   // px/s (was 80 — too fast per Brenden)
+  const PLAYER_SPEED       = 60; // px/s — 2x enemies (RUNNER=35, GRUNTER=25)
   const PLAYER_CLIMB_SPEED = 50;
   const PLAYER_FALL_SPEED  = 200;
   const DIG_RECHARGE_MS    = 350;
@@ -247,52 +247,68 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
     // Hmm — that lets dy default to 0 if on ladder and on ground. Good.
 
     // Apply horizontal movement at proper px/sec rate.
-    // Use a fractional position (`player.xFrac` accumulates dt*speed)
-    // and snap to integer col when crossing a tile boundary.
+    // The KEY insight: track fractional pixel position (xFrac), and update
+    // player.x AND player.col BOTH from that fractional value. No more per-
+    // frame tile-snap — player.x equals player.xFx directly every frame.
     if (dx !== 0) {
-      e_pXMove:
-      player.xFrac = (player.xFrac || 0) + dx * PLAYER_SPEED * dt;
-      const stepCol = (dx > 0) ? Math.floor(player.xFrac / TILE) : Math.ceil(player.xFrac / TILE);
-      if (stepCol !== 0) {
-        const newCol = player.col + stepCol;
+      if (player.xFx === undefined) player.xFx = player.x;
+      player.xFx += dx * PLAYER_SPEED * dt;
+      // Check if we crossed a tile boundary in the direction of motion.
+      // Compute previous tile index (from player.x) and current tile index
+      // (from xFrac). If they differ, we crossed a boundary.
+      const oldTile = (dx > 0) ? Math.floor(player.x / TILE) : Math.ceil(player.x / TILE);
+      const newTile = (dx > 0) ? Math.floor(player.xFx / TILE) : Math.ceil(player.xFx / TILE);
+      if (newTile !== oldTile) {
+        // Crossed a boundary. Check destination tile passability.
+        const newCol = (dx > 0) ? newTile : newTile;
         if (newCol >= 0 && newCol < COLS && isPassableAt(newCol, player.row)) {
           player.col = newCol;
-          player.x = player.col * TILE + TILE / 2;
-          // Keep fractional part for smooth motion
-          if (dx > 0) player.xFrac -= stepCol * TILE;
-          else player.xFrac -= stepCol * TILE;
         } else {
-          // Hit wall — clear fractional accumulator
-          player.xFrac = 0;
+          // Wall — stop at the boundary
+          player.xFx = (dx > 0) ? (oldTile * TILE + TILE / 2) : (oldTile * TILE - TILE / 2);
         }
       }
+      // Player.x is wherever xFrac ended up. Smooth, continuous.
+      player.x = player.xFx;
     } else {
-      player.xFrac = 0;  // reset when not moving
+      player.xFx = player.x;
     }
-    // Apply vertical movement
+    // Apply vertical movement at proper px/sec rate, continuous motion
+    // (not snapping to tile centers). Same approach as horizontal.
     if (dy !== 0) {
-      if (dy > 0) {
-        // Moving down: only if ladder column OR passable cell
-        const newRow = player.row + 1;
+      if (player.yFx === undefined) player.yFx = player.y;
+      const prevY = player.yFx;
+      player.yFx += dy * PLAYER_CLIMB_SPEED * dt;
+      // Check tile boundary crossing in direction of motion
+      const targetY = (dy > 0)
+        ? (Math.floor(player.yFx / TILE) * TILE + TILE / 2)
+        : (Math.ceil(player.yFx / TILE) * TILE + TILE / 2);
+      if (targetY !== prevY) {
+        const newRow = (targetY - TILE / 2) / TILE;
+        // Can the player move vertically to this row?
+        let canMove = false;
         if (wantsClimb) {
-          if (isLadderAt(player.col, player.row)) player.row = newRow;
+          canMove = isLadderAt(player.col, player.row) || isLadderAt(player.col, newRow);
         } else {
-          if (isPassableAt(player.col, newRow) || isLadderAt(player.col, newRow)) {
-            player.row = newRow;
-          }
+          // Falling — check destination cell is passable and there's something below to land on
+          canMove = isPassableAt(player.col, newRow) || isLadderAt(player.col, newRow);
         }
-        player.y = player.row * TILE + TILE / 2;
+        if (newRow >= 0 && newRow < ROWS && canMove) {
+          player.row = newRow;
+          player.y = targetY;
+        } else {
+          player.yFx = prevY;
+          player.y = prevY;
+        }
       } else {
-        // Moving up: only on ladder
-        if (isLadderAt(player.col, player.row) || wantsClimb) {
-          player.row = Math.max(0, player.row - 1);
-          player.y = player.row * TILE + TILE / 2;
-        }
+        player.y = player.yFx;
       }
       // Win check: standing on exit with all gold
       if (tileAt(player.col, player.row) === T_EXIT && player.goldCollected >= player.goldTotal) {
         triggerWin();
       }
+    } else {
+      player.yFx = player.y;
     }
 
     // Gold pickup
@@ -300,8 +316,12 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
       setTile(player.col, player.row, T_EMPTY);
       player.goldCollected++;
     }
-    player.x = player.col * TILE + TILE / 2;
-    player.y = player.row * TILE + TILE / 2;
+    // Snap to tile center only at ladder touches or when movement stopped.
+    // Otherwise player.x already tracks player.xFrac continuously.
+    if (!dx && !dy) {
+      player.x = player.col * TILE + TILE / 2;
+      player.y = player.row * TILE + TILE / 2;
+    }
 
     // Dig bricks
     player.digCooldown = Math.max(0, player.digCooldown - dt);
@@ -643,7 +663,12 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
   window.__loderunner = {
     getState: () => gameState,
     getGold: () => ({ collected: player.goldCollected, total: player.goldTotal }),
-    getPlayerPos: () => ({ col: player.col, row: player.row, x: player.x, y: player.y, alive: player.alive }),
+    getPlayerPos: () => ({
+      col: player.col, row: player.row,
+      x: player.x, y: player.y,
+      xFrac: player.xFx, yFrac: player.yFx,
+      alive: player.alive,
+    }),
     getEnemyCount: () => enemies.filter(e => e.alive).length,
     getEnemyPositions: () => enemies.filter(e => e.alive).map(e => ({ kind: e.kind, col: e.col, row: e.row, x: e.x, y: e.y })),
     getTile: (col, row) => tileAt(col, row),
