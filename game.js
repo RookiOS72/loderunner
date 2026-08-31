@@ -273,40 +273,33 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
     } else {
       player.xFx = player.x;
     }
-    // Apply vertical movement at proper px/sec rate, continuous motion
-    // (not snapping to tile centers). Same approach as horizontal.
+    // Apply vertical movement at proper px/sec rate, continuous motion.
+    // Same pattern as horizontal: track fractional pixel position (yFx),
+    // snap col on tile boundary.
     if (dy !== 0) {
       if (player.yFx === undefined) player.yFx = player.y;
-      const prevY = player.yFx;
       player.yFx += dy * PLAYER_CLIMB_SPEED * dt;
-      // Check tile boundary crossing in direction of motion
-      const targetY = (dy > 0)
-        ? (Math.floor(player.yFx / TILE) * TILE + TILE / 2)
-        : (Math.ceil(player.yFx / TILE) * TILE + TILE / 2);
-      if (targetY !== prevY) {
-        const newRow = (targetY - TILE / 2) / TILE;
-        // Can the player move vertically to this row?
+      // Compute previous tile index from player.y, current tile from yFx.
+      const oldTile = (dy > 0) ? Math.floor(player.y / TILE) : Math.ceil(player.y / TILE);
+      const newTile = (dy > 0) ? Math.floor(player.yFx / TILE) : Math.ceil(player.yFx / TILE);
+      if (newTile !== oldTile) {
+        // Crossed a tile boundary. Check passability.
+        const newRow = (dy > 0) ? newTile : newTile;
         let canMove = false;
         if (wantsClimb) {
           canMove = isLadderAt(player.col, player.row) || isLadderAt(player.col, newRow);
         } else {
-          // Falling — check destination cell is passable and there's something below to land on
+          // Falling — check destination cell passable
           canMove = isPassableAt(player.col, newRow) || isLadderAt(player.col, newRow);
         }
         if (newRow >= 0 && newRow < ROWS && canMove) {
           player.row = newRow;
-          player.y = targetY;
         } else {
-          player.yFx = prevY;
-          player.y = prevY;
+          // Blocked — snap back to current tile center, reset accumulator
+          player.yFx = (dy > 0) ? (oldTile * TILE + TILE / 2) : (oldTile * TILE - TILE / 2);
         }
-      } else {
-        player.y = player.yFx;
       }
-      // Win check: standing on exit with all gold
-      if (tileAt(player.col, player.row) === T_EXIT && player.goldCollected >= player.goldTotal) {
-        triggerWin();
-      }
+      player.y = player.yFx;
     } else {
       player.yFx = player.y;
     }
