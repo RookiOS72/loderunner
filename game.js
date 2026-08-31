@@ -84,7 +84,7 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
     "R ##  ######  ######  ######  ## ",   // row 20 main brick row (bottom)
     "  L                            L ",   // row 21 player spawn (ladders go down to here)
   ];
-  const PLAYER_SPAWN = { col: 4, row: 21 };
+  const PLAYER_SPAWN = { col: 2, row: 21 }; // on the left ladder
 
   // ---------------- State ----------------
   let level = [];
