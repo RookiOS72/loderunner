@@ -67,7 +67,7 @@ def main() -> int:
 
         # 3. Gold count is correct
         gold = page.evaluate("window.__loderunner.getGold()")
-        assert gold == {"collected": 0, "total": 4}, f"Expected 4 gold pieces, got {gold!r}"
+        assert gold == {"collected": 0, "total": 6}, f"Expected 6 gold pieces, got {gold!r}"
         print(f"  ✓ gold count = {gold['collected']}/{gold['total']}")
 
         # 4. Player can dig a brick
@@ -92,7 +92,7 @@ def main() -> int:
             }
             return result;
         }""")
-        assert len(gold_positions) == 4, f"Expected 4 gold pieces in level, got {len(gold_positions)}"
+        assert len(gold_positions) == 6, f"Expected 6 gold pieces in level, got {len(gold_positions)}"
         # Pickup the first gold
         target = gold_positions[0]
         page.evaluate(f"window.__loderunner.setPlayerAt({target['col']}, {target['row']})")

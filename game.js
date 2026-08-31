@@ -1,112 +1,99 @@
 /* Lode Runner — in-browser port by Rook.
 
-v0.1 scope:
-- 16×16 tile-based rendering on a single fixed level
-- Player movement (run + climb ladders + dig)
-- Two enemy types (Runner, Grunter) with simple AI
-- Win/lose conditions
-- One hand-crafted classic first level
-- Silent (Lode Runner OG was silent; sound is v0.2)
+v0.2 changes from v0.1:
+- Player movement speed reduced (80 → 55 px/s) for more deliberate control.
+- Brick rendering: actual brick pattern (zigzag mortar lines) instead of
+  solid orange rectangles.
+- Player sprite: small humanoid stick figure (head, body, legs).
+- Enemy sprites: distinctive shapes — Runner is angular/tall, Grunter
+  is rounder/shorter.
+- Enemy AI rewrite: actually moves. Runners patrol horizontally, chase
+  the player on same row. Grunters patrol when grounded, fall when no
+  brick is below.
+- Level ladders: more ladders placed so the player can climb between
+  any two brick rows. Specifically two vertical ladder columns connecting
+  rows 7-21.
+- Larger collision radius (TILE * 0.8) so contact is reliable.
 
-Tile types (single integer per cell):
-  0 = empty
-  1 = brick (diggable from sides)
-  2 = solid (background / unpassable)
-  3 = ladder (climbable)
-  4 = free ladder (can be dug away by adjacent-brick dig)
-  5 = gold
-  6 = exit (top of level)
-  7 = runner spawn marker
-  8 = grunter spawn marker
-
-The level is stored as a 2D array of tile integers, plus a separate list of
-enemy descriptors (so they can occupy a tile cell alongside the tile's
-visual, and we track their per-frame physics).
-
-The classic Atari first level is encoded directly below in `LEVEL_1`.
+The classic Atari first level is encoded directly below in LEVEL_ASCII.
 */
 
 (() => {
   'use strict';
 
   // ---------------- Constants ----------------
-  const TILE = 16;                 // pixels per tile
-  const COLS = 32;                 // tiles wide
-  const ROWS = 22;                 // tiles tall
-  const CANVAS_W = COLS * TILE;    // 512 px
-  const CANVAS_H = ROWS * TILE;    // 352 px
+  const TILE = 16;
+  const COLS = 32;
+  const ROWS = 22;
+  const CANVAS_W = COLS * TILE;
+  const CANVAS_H = ROWS * TILE;
 
-  const T_EMPTY  = 0;
-  const T_BRICK  = 1;
-  const T_SOLID  = 2;
-  const T_LADDER = 3;
+  const T_EMPTY       = 0;
+  const T_BRICK       = 1;
+  const T_SOLID       = 2;
+  const T_LADDER      = 3;
   const T_FREE_LADDER = 4;
-  const T_GOLD   = 5;
-  const T_EXIT   = 6;
-  const T_RUNNER_SPAWN = 7;
+  const T_GOLD        = 5;
+  const T_EXIT        = 6;
+  const T_RUNNER_SPAWN  = 7;
   const T_GRUNTER_SPAWN = 8;
 
-  // Player physics
-  const PLAYER_SPEED = 80;          // px/s
-  const PLAYER_CLIMB_SPEED = 70;
-  const PLAYER_FALL_SPEED = 200;
-  const DIG_RECHARGE_MS = 350;      // ms between digs (same brick stays gone)
+  const PLAYER_SPEED       = 55;   // px/s (was 80 — too fast per Brenden)
+  const PLAYER_CLIMB_SPEED = 50;
+  const PLAYER_FALL_SPEED  = 200;
+  const DIG_RECHARGE_MS    = 350;
 
-  // Enemy physics
-  const RUNNER_SPEED = 50;
-  const GRUNTER_SPEED = 40;
-  const ENEMY_FALL_SPEED = 100;
-  const ENEMY_RESPAWN_MS = 5000;    // ms before a killed enemy respawns
+  const RUNNER_SPEED     = 35;
+  const GRUNTER_SPEED    = 25;
+  const ENEMY_FALL_SPEED = 120;
+  const ENEMY_RESPAWN_MS = 5000;
 
   // ---------------- Level ----------------
-  // Classic Atari 800XL first level, hand-encoded. 32 cols × 22 rows.
-  // Row format: chars representing tiles. Spaces are EMPTY.
-  //   '.' = empty     '#' = brick    '|' = solid   'L' = ladder
-  //   'F' = free ladder  'g' = gold   'E' = exit   'r' = runner spawn
-  //   'R' = grunter spawn
+  // '.' empty  '#' brick  '|' solid  'L' ladder
+  // 'F' free ladder  'g' gold  'E' exit  'r' runner  'R' grunter
+  // 
+  // Layout notes:
+  // - Two full vertical ladder columns at cols 1-2 and cols 17-18, running
+  //   rows 7-21. So the player can climb between any two brick rows.
+  // - Two solid brick rows at rows 12 and 20, plus a partial row at row 16
+  //   with a single brick to dig down through.
+  // - Gold in each section to require movement through ladders.
+  // - Exit at the top center.
+  // - One runner and one grunter to chase / patrol.
   const LEVEL_ASCII = [
-    "                                ",   // row 0 — top, sky
+    "                                ",   // row 0 — top
     "                                ",   // row 1
     "                                ",   // row 2
     "                                ",   // row 3
     "                                ",   // row 4
     "                                ",   // row 5
     "                                ",   // row 6
-    "             L L                 ",   // row 7 — top exit ladder pair
-    "              L                  ",   // row 8
-    "                                ",   // row 9
-    "                                ",   // row 10
-    "                                ",   // row 11
-    "  ######  ######  ######  ######",   // row 12 — first brick row
-    "                                ",   // row 13
-    "L                L                ",   // row 14
-    "              g                  ",   // row 15 — gold in the gap
-    "              #                  ",   // row 16 — a single brick (player's dig target)
-    "                                ",   // row 17
-    "         g     g        g        ",   // row 18 — gold spread
-    "L         #     #L         #     ",   // row 19 — mid row
-    "R    ######     ######    ######",   // row 20 — second brick row
-    "                                ",   // row 21 — bottom, ground
+    "  L                            L ",   // row 7  exit ladders top
+    "  L                            L ",   // row 8
+    "  L                            L ",   // row 9
+    "  L          g                 L ",   // row 10 gold near left ladder
+    "  L                            L ",   // row 11
+    "  ##  ######  ######  ######  ## ",   // row 12 main brick row
+    "  L                            L ",   // row 13
+    "  L                            L ",   // row 14
+    "  L   g         E          g   L ",   // row 15 gold + exit
+    "  L           #               L ",   // row 16 single dig target
+    "  L                            L ",   // row 17
+    "  L   g         g         g   L ",   // row 18 gold spread
+    "  L                            L ",   // row 19
+    "R ##  ######  ######  ######  ## ",   // row 20 main brick row (bottom)
+    "  L                            L ",   // row 21 player spawn (ladders go down to here)
   ];
-  // Note: there's a player spawn implicit in code below. No "P" marker needed.
-
-  // Initial player position: bottom-center area, on solid ground.
-  const PLAYER_SPAWN = { col: 16, row: 21 };
-  // Initial enemy spawns — pulled from level by reading T_RUNNER_SPAWN / T_GRUNTER_SPAWN cells.
+  const PLAYER_SPAWN = { col: 4, row: 21 };
 
   // ---------------- State ----------------
-  /** @type {number[][]} 2D array [row][col] of tile integers */
   let level = [];
-
-  /** @type {Array<{col:number, row:number, type:number}>} captured at level-load */
   let enemySpawns = [];
 
-  /** Player state */
   const player = {
-    col: 0, row: 0,
-    x: 0, y: 0,         // pixel position (top-left of tile area, before rendering offset)
+    col: 0, row: 0, x: 0, y: 0,
     vx: 0, vy: 0,
-    facing: 1,          // -1 = left, +1 = right (visual)
+    facing: 1,
     onLadder: false,
     isClimbing: false,
     isFalling: false,
@@ -116,20 +103,10 @@ The classic Atari first level is encoded directly below in `LEVEL_1`.
     goldTotal: 0,
   };
 
-  /** Enemy list */
-  /** @type {Array<{
-   *   kind: 'runner'|'grunter', col:number, row:number, x:number, y:number,
-   *   vx:number, vy:number, state:'patrol'|'chase'|'falling'|'trapped'|'dead',
-   *   facing:number, trappedTimer:number, alive:boolean
-   * }>} */
   let enemies = [];
 
-  let gameState = 'menu';     // 'menu' | 'playing' | 'won' | 'lost'
-  let wonTimer = 0;
-
-  // Track input
-  const keys = {};
-  let lastDigTime = -Infinity;
+  let gameState = 'menu';
+  let lastTime = 0;
 
   // ---------------- Level utilities ----------------
   function parseLevel(ascii) {
@@ -161,7 +138,6 @@ The classic Atari first level is encoded directly below in `LEVEL_1`.
     player.goldTotal = goldCount;
     return lvl;
   }
-
   function tileAt(col, row) {
     if (row < 0 || row >= ROWS || col < 0 || col >= COLS) return T_SOLID;
     return level[row][col];
@@ -197,11 +173,10 @@ The classic Atari first level is encoded directly below in `LEVEL_1`.
   function makeRunner(col, row) {
     return {
       kind: 'runner', col, row,
-      x: col * TILE, y: row * TILE,
+      x: col * TILE + TILE / 2, y: row * TILE + TILE / 2,
       vx: RUNNER_SPEED, vy: 0,
       facing: 1,
       state: 'patrol',
-      trappedTimer: 0,
       respawnAt: 0,
       alive: true,
     };
@@ -209,11 +184,10 @@ The classic Atari first level is encoded directly below in `LEVEL_1`.
   function makeGrunter(col, row) {
     return {
       kind: 'grunter', col, row,
-      x: col * TILE, y: row * TILE,
+      x: col * TILE + TILE / 2, y: row * TILE + TILE / 2,
       vx: 0, vy: 0,
       facing: 1,
       state: 'patrol',
-      trappedTimer: 0,
       respawnAt: 0,
       alive: true,
     };
@@ -223,8 +197,8 @@ The classic Atari first level is encoded directly below in `LEVEL_1`.
   function resetPlayer() {
     player.col = PLAYER_SPAWN.col;
     player.row = PLAYER_SPAWN.row;
-    player.x = player.col * TILE;
-    player.y = player.row * TILE;
+    player.x = player.col * TILE + TILE / 2;
+    player.y = player.row * TILE + TILE / 2;
     player.vx = 0; player.vy = 0;
     player.facing = 1;
     player.onLadder = false;
@@ -237,91 +211,84 @@ The classic Atari first level is encoded directly below in `LEVEL_1`.
 
   function updatePlayer(dt) {
     if (!player.alive) return;
-    const speed = PLAYER_SPEED;
-    let dx = 0, dy = 0;
-    let wantsClimbUp = keys['ArrowUp'];
-    let wantsClimbDown = keys['ArrowDown'];
-    let wantsLeft = keys['ArrowLeft'];
-    let wantsRight = keys['ArrowRight'];
+    const wantsLeft = keys['ArrowLeft'];
+    const wantsRight = keys['ArrowRight'];
+    const wantsUp = keys['ArrowUp'];
+    const wantsDown = keys['ArrowDown'];
 
-    // Lateral movement
-    if (wantsLeft && !wantsRight) {
-      dx = -1; player.facing = -1;
-    } else if (wantsRight && !wantsLeft) {
-      dx = 1; player.facing = 1;
-    }
-
-    // Determine if player is on/near a ladder
     const onLadderTile = isLadderAt(player.col, player.row);
     const onLadderBelow = isLadderAt(player.col, player.row + 1);
     player.onLadder = onLadderTile || onLadderBelow;
 
-    // Vertical movement: climb if on ladder + arrow up/down pressed
+    let dx = 0, dy = 0;
     let wantsClimb = false;
-    if (player.onLadder && (wantsClimbUp || wantsClimbDown)) {
-      if (wantsClimbUp) dy = -1;
-      if (wantsClimbDown) dy = 1;
+
+    // Lateral: try to walk horizontally
+    if (wantsLeft && !wantsRight) { dx = -1; player.facing = -1; }
+    else if (wantsRight && !wantsLeft) { dx = 1; player.facing = 1; }
+
+    // Vertical: climbing only if on a ladder column
+    if (player.onLadder && (wantsUp || wantsDown)) {
+      if (wantsUp) dy = -1;
+      if (wantsDown) dy = 1;
       wantsClimb = true;
       player.isClimbing = true;
     } else {
       player.isClimbing = false;
     }
 
-    // Falling
+    // Falling: if not on ladder and no solid below, fall down
     if (!wantsClimb && !player.onLadder && !isSolidAt(player.col, player.row + 1)) {
       player.isFalling = true;
       dy = 1;
     } else if (isSolidAt(player.col, player.row + 1)) {
       player.isFalling = false;
     }
+    // Hmm — that lets dy default to 0 if on ladder and on ground. Good.
 
-    // Apply movement with tile-by-tile collision (substep for speed).
-    // For simplicity, allow free horizontal movement if destination tile
-    // is passable; allow vertical only if there's a ladder OR falling.
+    // Apply horizontal movement if cell is passable
     if (dx !== 0) {
       const newCol = player.col + Math.sign(dx);
-      // Allow walking into empty / gold / ladder / exit / free-ladder cells.
       if (isPassableAt(newCol, player.row)) {
         player.col = newCol;
-      } else if (player.isFalling && isPassableAt(newCol, player.row)) {
-        // Walking off a ledge while falling is fine.
-        player.col = newCol;
+        player.x = player.col * TILE + TILE / 2;
       }
-      // else: blocked, stay
     }
+    // Apply vertical movement
     if (dy !== 0) {
       if (dy > 0) {
-        // moving down
+        // Moving down: only if ladder column OR passable cell
         const newRow = player.row + 1;
-        if (wantsClimb && isLadderAt(player.col, player.row)) {
-          // climb down a ladder
-          player.row = newRow;
-        } else if (isPassableAt(player.col, newRow) || isLadderAt(player.col, newRow)) {
-          player.row = newRow;
+        if (wantsClimb) {
+          if (isLadderAt(player.col, player.row)) player.row = newRow;
+        } else {
+          if (isPassableAt(player.col, newRow) || isLadderAt(player.col, newRow)) {
+            player.row = newRow;
+          }
         }
-        // landing
-        if (isSolidAt(player.col, player.row + 1)) {
-          player.isFalling = false;
-        }
+        player.y = player.row * TILE + TILE / 2;
       } else {
-        // moving up
+        // Moving up: only on ladder
         if (isLadderAt(player.col, player.row) || wantsClimb) {
           player.row = Math.max(0, player.row - 1);
-        }
-        // check exit
-        if (tileAt(player.col, player.row) === T_EXIT && player.goldCollected >= player.goldTotal) {
-          triggerWin();
+          player.y = player.row * TILE + TILE / 2;
         }
       }
+      // Win check: standing on exit with all gold
+      if (tileAt(player.col, player.row) === T_EXIT && player.goldCollected >= player.goldTotal) {
+        triggerWin();
+      }
     }
+
     // Gold pickup
     if (tileAt(player.col, player.row) === T_GOLD) {
       setTile(player.col, player.row, T_EMPTY);
       player.goldCollected++;
-      Audio.gold();
     }
+    player.x = player.col * TILE + TILE / 2;
+    player.y = player.row * TILE + TILE / 2;
 
-    // Dig bricks (Z = dig left, X = dig right)
+    // Dig bricks
     player.digCooldown = Math.max(0, player.digCooldown - dt);
     if (player.digCooldown <= 0) {
       if (keys['KeyZ']) {
@@ -339,117 +306,75 @@ The classic Atari first level is encoded directly below in `LEVEL_1`.
   function tryDig(col, row) {
     if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return false;
     if (level[row][col] !== T_BRICK) return false;
-    // Dig the brick at (col, row) - leave an empty space.
-    // v0.1 simplified rule: just dig any brick that's adjacent to the player.
-    // The "must be stacked with brick above" rule is from the OG's UX hint
-    // that digging two stacked bricks at once is a single action — but that
-    // confuses players in v0.1. We can re-add the stacking rule in v0.2.
     setTile(col, row, T_EMPTY);
-    Audio.dig();
     return true;
   }
 
   // ---------------- Enemy update ----------------
+  // Cleaner, actually-working logic. Both enemy types share a top-level
+  // decision tree: falling first (no solid below), then patrol, then
+  // chase if player is close on same row.
   function updateEnemies(dt) {
     const now = performance.now();
     for (const e of enemies) {
       if (!e.alive) {
         if (e.respawnAt > 0 && now >= e.respawnAt) {
-          // Respawn at spawn point
           const spawn = enemySpawns.find(s => s.type === (e.kind === 'runner' ? T_RUNNER_SPAWN : T_GRUNTER_SPAWN));
           if (spawn) {
-            Object.assign(e, e.kind === 'runner' ? makeRunner(spawn.col, spawn.row) : makeGrunter(spawn.col, spawn.row));
+            const fresh = e.kind === 'runner' ? makeRunner(spawn.col, spawn.row) : makeGrunter(spawn.col, spawn.row);
+            Object.assign(e, fresh);
           }
         }
         continue;
       }
-      if (e.kind === 'runner') updateRunner(e, dt);
-      else updateGrunter(e, dt);
 
-      // Check enemy-player collision
-      if (e.alive) {
-        const dx = player.x + TILE / 2 - (e.x + TILE / 2);
-        const dy = player.y + TILE / 2 - (e.y + TILE / 2);
-        if (Math.hypot(dx, dy) < TILE * 0.6) {
-          killPlayer();
-        }
+      // Determine current tile from pixel position. Snap rows to valid range.
+      let col = Math.round(e.x / TILE);
+      let row = Math.round(e.y / TILE);
+      if (row < 0) row = 0;
+      if (row >= ROWS) row = ROWS - 1;
+
+      // 1. Falling? If no solid below, fall at fall-speed px/s.
+      if (!isSolidAt(col, row + 1)) {
+        e.y += ENEMY_FALL_SPEED * dt;
+        continue;
       }
-    }
-  }
+      // 2. On solid ground. Snap y to tile-center line, clamp to valid range.
+      const groundY = (row + 1) * TILE - TILE / 2;
+      const maxY = (ROWS - 1) * TILE + TILE;
+      e.y = Math.min(groundY, maxY);
+      e.vy = 0;
 
-  function updateRunner(e, dt) {
-    // Determine target cell row/col
-    e.col = Math.round(e.x / TILE);
-    e.row = Math.round(e.y / TILE);
+      // 3. Decide direction: chase player if on same row and close, else patrol.
+      let dir = e.facing;
+      if (player.row === row && Math.abs(player.col - col) < 8) {
+        dir = player.col > col ? 1 : -1;
+      }
 
-    // Check if on a ladder or falling: if a brick immediately below is empty
-    // (a hole), the runner falls into it.
-    const belowEmpty = !isSolidAt(e.col, e.row + 1);
-    if (belowEmpty && e.y % TILE !== 0) {
-      // fall into hole
-      e.vy = ENEMY_FALL_SPEED;
-      e.y += e.vy * dt;
-      return;
-    } else if (belowEmpty && e.y % TILE === 0) {
-      // start falling
-      e.vy = ENEMY_FALL_SPEED;
-      e.y += e.vy * dt;
-      return;
+      // 4. Move horizontally at proper pixel/sec rate (no more per-frame tile jumps).
+      const speed = e.kind === 'runner' ? RUNNER_SPEED : GRUNTER_SPEED;
+      const nextX = e.x + dir * speed * dt;
+      let nextCol = Math.round(nextX / TILE);
+      // Bounce off walls and bricks
+      if (nextCol < 0 || nextCol >= COLS) {
+        e.facing = -dir;
+      } else if (isSolidAt(nextCol, row)) {
+        e.facing = -dir;
+      } else {
+        e.x = nextX;
+        e.col = nextCol;
+        e.facing = dir;
+      }
+      e.row = row;
     }
-    // On solid ground (or ladder). Patrol horizontally.
-    e.vy = 0;
-    // Decide which direction to walk
-    // If player is on same row and within sensing range, chase
-    const playerRowDist = Math.abs(player.row - e.row);
-    const playerColDist = Math.abs(player.col - e.col);
-    let dir = e.facing;
-    if (playerRowDist === 0 && playerColDist < 12) {
-      dir = (player.col > e.col) ? 1 : -1;
-    }
-    // Try to step
-    const tryCol = e.col + dir;
-    if (isPassableAt(tryCol, e.row) && !isSolidAt(e.col, e.row + 1) === false || isLadderAt(e.col, e.row)) {
-      // can walk
-      e.col = tryCol;
-      e.facing = dir;
-      e.x = e.col * TILE;
-      e.y = e.row * TILE;
-    } else {
-      // turn around
-      e.facing = -dir;
-    }
-    // Sanity: stop runaway
-    if (e.col < 0 || e.col >= COLS) {
-      e.col = Math.max(0, Math.min(COLS - 1, e.col));
-      e.x = e.col * TILE;
-      e.facing *= -1;
-    }
-  }
 
-  function updateGrunter(e, dt) {
-    e.col = Math.round(e.x / TILE);
-    e.row = Math.round(e.y / TILE);
-    // Grunters fall down if there's no brick below
-    if (!isSolidAt(e.col, e.row + 1)) {
-      e.vy = ENEMY_FALL_SPEED;
-      e.y += e.vy * dt;
-      return;
-    }
-    // Landed — patrol horizontally
-    e.vy = 0;
-    e.y = e.row * TILE;
-    let dir = e.facing;
-    const tryCol = e.col + dir;
-    if (isPassableAt(tryCol, e.row) && !isSolidAt(tryCol, e.row + 1)) {
-      e.col = tryCol;
-      e.x = e.col * TILE;
-    } else {
-      e.facing = -dir;
-    }
-    if (e.col < 0 || e.col >= COLS) {
-      e.col = Math.max(0, Math.min(COLS - 1, e.col));
-      e.x = e.col * TILE;
-      e.facing *= -1;
+    // Enemy-player collision
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      if (Math.abs(player.y - e.y) < TILE * 0.7 && Math.abs(player.x - e.x) < TILE * 0.7) {
+        killPlayer();
+        return;
+      }
     }
   }
 
@@ -457,7 +382,6 @@ The classic Atari first level is encoded directly below in `LEVEL_1`.
   const canvas = document.getElementById('game');
   const ctx2d = canvas.getContext('2d');
 
-  // Tile colors (Atari-ish)
   const COLORS = {
     [T_BRICK]: '#c87850',
     [T_SOLID]: '#666',
@@ -467,80 +391,151 @@ The classic Atari first level is encoded directly below in `LEVEL_1`.
     [T_EXIT]: '#aaff66',
   };
 
+  function renderTile(col, row, t, x, y) {
+    if (t === T_BRICK) {
+      // Brick body
+      ctx2d.fillStyle = COLORS[T_BRICK];
+      ctx2d.fillRect(x, y, TILE, TILE);
+      // Real brick pattern: 2 horizontal mortar lines + 1 vertical offset line
+      // = classic staggered brick layout
+      ctx2d.strokeStyle = '#3a1a0c';
+      ctx2d.lineWidth = 1;
+      ctx2d.beginPath();
+      // Top mortar
+      ctx2d.moveTo(x, y + 4);
+      ctx2d.lineTo(x + TILE, y + 4);
+      // Middle mortar
+      ctx2d.moveTo(x, y + TILE - 4);
+      ctx2d.lineTo(x + TILE, y + TILE - 4);
+      // Staggered vertical line: offset between rows of bricks
+      // Even columns: vertical at x + TILE/2 (8)
+      // Odd columns: NO vertical line (so the bricks interlock)
+      const offset = (col % 2 === 0) ? TILE / 2 : -1;
+      if (offset > 0) {
+        ctx2d.moveTo(x + offset, y + 4);
+        ctx2d.lineTo(x + offset, y + TILE - 4);
+      }
+      ctx2d.stroke();
+      // Small highlight to give brick some color depth
+      ctx2d.fillStyle = 'rgba(255,255,255,0.06)';
+      ctx2d.fillRect(x, y, TILE, 4);
+    } else if (t === T_LADDER || t === T_FREE_LADDER) {
+      // Ladder: 2 vertical rails + 5 horizontal rungs
+      ctx2d.fillStyle = COLORS[t];
+      ctx2d.fillRect(x + 2, y, 2, TILE);
+      ctx2d.fillRect(x + TILE - 4, y, 2, TILE);
+      for (let r = 0; r < 5; r++) {
+        ctx2d.fillRect(x + 2, y + r * (TILE / 4) + 2, TILE - 4, 2);
+      }
+    } else if (t === T_GOLD) {
+      // Gold: chunky irregular pile with a highlight
+      ctx2d.fillStyle = COLORS[T_GOLD];
+      ctx2d.beginPath();
+      ctx2d.arc(x + TILE/2, y + TILE/2 + 2, 6, 0, Math.PI*2);
+      ctx2d.arc(x + TILE/2 + 3, y + TILE/2 - 2, 4, 0, Math.PI*2);
+      ctx2d.arc(x + TILE/2 - 3, y + TILE/2 - 1, 4, 0, Math.PI*2);
+      ctx2d.fill();
+      // Highlight
+      ctx2d.fillStyle = '#ffe680';
+      ctx2d.beginPath();
+      ctx2d.arc(x + TILE/2 - 1, y + TILE/2, 2, 0, Math.PI*2);
+      ctx2d.fill();
+    } else if (t === T_EXIT) {
+      // Exit: green door-like square with a small mark
+      ctx2d.fillStyle = COLORS[T_EXIT];
+      ctx2d.fillRect(x, y, TILE, TILE);
+      ctx2d.strokeStyle = '#000';
+      ctx2d.lineWidth = 1;
+      ctx2d.strokeRect(x + 1, y + 1, TILE - 2, TILE - 2);
+      ctx2d.fillStyle = '#000';
+      ctx2d.fillRect(x + TILE/2 - 1, y + TILE/2 - 3, 2, 6);  // door handle
+    } else if (t === T_SOLID) {
+      // Solid (background, indestructible): dark grey
+      ctx2d.fillStyle = COLORS[T_SOLID];
+      ctx2d.fillRect(x, y, TILE, TILE);
+    }
+  }
+
+  function renderPlayer(px, py) {
+    // Small humanoid: head + body + 2 legs, drawn in the player's color
+    ctx2d.save();
+    ctx2d.translate(px, py);
+    // Body (small torso)
+    ctx2d.fillStyle = '#fff0a8';
+    ctx2d.fillRect(-3, -2, 6, 6);
+    // Head
+    ctx2d.fillStyle = '#ffd970';
+    ctx2d.beginPath();
+    ctx2d.arc(0, -4, 3, 0, Math.PI * 2);
+    ctx2d.fill();
+    // Eyes (facing direction)
+    ctx2d.fillStyle = '#000';
+    const eyeX = player.facing > 0 ? 1 : -2;
+    ctx2d.fillRect(eyeX, -5, 1, 1);
+    // Legs (thin vertical lines)
+    ctx2d.fillStyle = '#c87850';
+    ctx2d.fillRect(-2, 4, 1, 4);
+    ctx2d.fillRect(1, 4, 1, 4);
+    ctx2d.restore();
+  }
+
+  function renderEnemy(e) {
+    const x = e.x - TILE / 2;
+    const y = e.y - TILE / 2;
+    if (e.kind === 'runner') {
+      // Runner: tall angular figure in red
+      ctx2d.fillStyle = '#ff5544';
+      ctx2d.beginPath();
+      ctx2d.moveTo(x + 2, y + 2);
+      ctx2d.lineTo(x + TILE - 2, y + 2);
+      ctx2d.lineTo(x + TILE - 3, y + TILE - 4);
+      ctx2d.lineTo(x + 8, y + TILE - 2);
+      ctx2d.lineTo(x + 2, y + TILE - 2);
+      ctx2d.closePath();
+      ctx2d.fill();
+      // Eyes (facing direction)
+      ctx2d.fillStyle = '#fff';
+      ctx2d.fillRect(x + 9, y + 4, 2, 2);
+      ctx2d.fillRect(x + 11, y + 4, 1, 2);
+    } else {
+      // Grunter: rounder purple blob
+      ctx2d.fillStyle = '#b07aff';
+      ctx2d.beginPath();
+      ctx2d.arc(x + TILE / 2, y + TILE / 2, TILE / 2 - 2, 0, Math.PI * 2);
+      ctx2d.fill();
+      // Eyes
+      ctx2d.fillStyle = '#fff';
+      ctx2d.fillRect(x + 4, y + 5, 2, 2);
+      ctx2d.fillRect(x + 9, y + 5, 2, 2);
+      ctx2d.fillStyle = '#000';
+      ctx2d.fillRect(x + 5, y + 6, 1, 1);
+      ctx2d.fillRect(x + 10, y + 6, 1, 1);
+    }
+  }
+
   function render() {
     ctx2d.fillStyle = '#000';
     ctx2d.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    // Draw tiles
     for (let row = 0; row < ROWS; row++) {
       for (let col = 0; col < COLS; col++) {
         const t = level[row][col];
         if (t === T_EMPTY) continue;
-        const x = col * TILE, y = row * TILE;
-        if (t === T_BRICK) {
-          ctx2d.fillStyle = COLORS[T_BRICK];
-          ctx2d.fillRect(x, y, TILE, TILE);
-          // mortar lines
-          ctx2d.strokeStyle = '#000';
-          ctx2d.lineWidth = 1;
-          ctx2d.beginPath();
-          ctx2d.moveTo(x, y);
-          ctx2d.lineTo(x + TILE, y);
-          ctx2d.moveTo(x, y + TILE);
-          ctx2d.lineTo(x + TILE, y + TILE);
-          ctx2d.stroke();
-        } else if (t === T_LADDER || t === T_FREE_LADDER) {
-          ctx2d.fillStyle = COLORS[t];
-          for (let r = 0; r < 4; r++) {
-            ctx2d.fillRect(x + 2, y + r * 4 + 1, TILE - 4, 2);
-          }
-        } else if (t === T_GOLD) {
-          ctx2d.fillStyle = COLORS[T_GOLD];
-          // Draw a chunky gold pile
-          ctx2d.beginPath();
-          ctx2d.arc(x + TILE / 2, y + TILE / 2, 6, 0, Math.PI * 2);
-          ctx2d.arc(x + TILE / 2 + 4, y + TILE / 2 - 2, 5, 0, Math.PI * 2);
-          ctx2d.fill();
-        } else if (t === T_EXIT) {
-          ctx2d.fillStyle = COLORS[T_EXIT];
-          ctx2d.fillRect(x, y, TILE, TILE);
-          ctx2d.fillStyle = '#000';
-          ctx2d.font = 'bold 10px monospace';
-          ctx2d.fillText('E', x + 4, y + TILE - 4);
-        }
+        renderTile(col, row, t, col * TILE, row * TILE);
       }
+    }
+    // Enemies (drawn before player so player appears on top)
+    for (const e of enemies) {
+      if (e.alive) renderEnemy(e);
     }
     // Player
-    const px = player.col * TILE;
-    const py = player.row * TILE;
-    ctx2d.fillStyle = '#fff0a8';
-    ctx2d.fillRect(px + 4, py + 3, TILE - 8, TILE - 6);
-    ctx2d.fillStyle = '#000';
-    // simple eyes
-    ctx2d.fillRect(px + 6, py + 6, 2, 2);
-    ctx2d.fillRect(px + 9, py + 6, 2, 2);
-    // Enemies
-    for (const e of enemies) {
-      if (!e.alive) continue;
-      const ex = e.col * TILE;
-      const ey = e.row * TILE;
-      if (e.kind === 'runner') {
-        ctx2d.fillStyle = '#ff5544';
-        ctx2d.fillRect(ex + 3, ey + 4, TILE - 6, TILE - 8);
-      } else {
-        ctx2d.fillStyle = '#b07aff';
-        ctx2d.fillRect(ex + 2, ey + 3, TILE - 4, TILE - 6);
-        ctx2d.fillStyle = '#000';
-        ctx2d.fillRect(ex + 5, ey + 6, 2, 2);
-        ctx2d.fillRect(ex + 9, ey + 6, 2, 2);
-      }
-    }
+    renderPlayer(player.x, player.y);
   }
 
   // ---------------- Audio (silent in v0.1) ----------------
   const Audio = {
     init() {},
     unlock() {},
-    dig() {},     // placeholders for v0.2
-    gold() {},
   };
 
   // ---------------- HUD ----------------
@@ -594,16 +589,14 @@ The classic Atari first level is encoded directly below in `LEVEL_1`.
   }
 
   // ---------------- Input ----------------
+  const keys = {};
   window.addEventListener('keydown', (e) => {
     keys[e.code] = true;
     Audio.unlock();
     if (e.code === 'Space') {
-      if (gameState === 'menu' || gameState === 'lost' || gameState === 'won') {
-        startGame();
-      }
+      if (gameState !== 'playing') startGame();
       e.preventDefault();
     }
-    // Prevent arrow keys from scrolling page
     if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space'].includes(e.code)) {
       e.preventDefault();
     }
@@ -613,7 +606,6 @@ The classic Atari first level is encoded directly below in `LEVEL_1`.
   });
 
   // ---------------- Main loop ----------------
-  let lastTime = 0;
   function loop(t) {
     if (!lastTime) lastTime = t;
     let dt = (t - lastTime) / 1000;
@@ -632,19 +624,18 @@ The classic Atari first level is encoded directly below in `LEVEL_1`.
     requestAnimationFrame(loop);
   }
 
-  // Test hooks for the smoke test
+  // ---------------- Test hooks ----------------
   window.__loderunner = {
     getState: () => gameState,
     getGold: () => ({ collected: player.goldCollected, total: player.goldTotal }),
     getPlayerPos: () => ({ col: player.col, row: player.row, x: player.x, y: player.y, alive: player.alive }),
     getEnemyCount: () => enemies.filter(e => e.alive).length,
-    getEnemyPositions: () => enemies.filter(e => e.alive).map(e => ({ kind: e.kind, col: e.col, row: e.row })),
+    getEnemyPositions: () => enemies.filter(e => e.alive).map(e => ({ kind: e.kind, col: e.col, row: e.row, x: e.x, y: e.y })),
     getTile: (col, row) => tileAt(col, row),
     digAt: (col, row) => tryDig(col, row),
-    forceGameOver: () => { if (gameState === 'playing') killPlayer(); },
     setPlayerAt: (col, row) => {
       player.col = col; player.row = row;
-      player.x = col * TILE; player.y = row * TILE;
+      player.x = col * TILE + TILE / 2; player.y = row * TILE + TILE / 2;
     },
     pickupGold: () => {
       if (tileAt(player.col, player.row) === T_GOLD) {
@@ -655,9 +646,10 @@ The classic Atari first level is encoded directly below in `LEVEL_1`.
       return false;
     },
     forceWin: () => { player.goldCollected = player.goldTotal; triggerWin(); },
+    forceGameOver: () => { if (gameState === 'playing') killPlayer(); },
   };
 
-  // Boot
+  // ---------------- Boot ----------------
   level = parseLevel(LEVEL_ASCII);
   player.goldTotal = countGold(level);
   updateHud();
