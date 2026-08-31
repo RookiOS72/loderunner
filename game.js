@@ -669,6 +669,10 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
     setPlayerAt: (col, row) => {
       player.col = col; player.row = row;
       player.x = col * TILE + TILE / 2; player.y = row * TILE + TILE / 2;
+      // Reset fractional position too so the player doesn't continue climbing
+      // from a stale yFrac value that crosses back into a previous tile.
+      player.xFx = player.x;
+      player.yFx = player.y;
     },
     pickupGold: (col, row) => {
       // Accept explicit col/row to avoid race with player motion between
