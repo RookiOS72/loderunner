@@ -21,16 +21,21 @@ open index.html
 | `X` | Dig to the right |
 | `Space` | Start / Restart |
 
-## What's in v0.1
+## What's in v0.2
 
-- Tile-based 16×16 retro graphics with classic Atari color palette
-- Player movement (run + climb ladders)
-- Brick digging (left or right of the player)
-- Gold collection (every piece is required to clear the level)
-- Two enemy types: red Runners (chase horizontally) and purple Grunters (fall and can be trapped in dug bricks)
-- One hand-crafted classic first level (~28 × 16 tiles)
-- Win condition: collect all gold → reach top → level clear
-- Lose condition: touch any enemy
+- Tile-based 16×16 retro graphics with classic Atari color palette (orange bricks with real brick-pattern mortar, yellow gold piles, green exit, yellow ladder rungs)
+- **Real brick-pattern rendering:** staggered bricks with mortar lines (not solid rectangles)
+- **Player movement:** arrow keys to run (55 px/s), climb ladders, fall through dug bricks
+- **Two ladder columns** at cols 2 and 30, running rows 7–21, so the player can climb between any brick row
+- **Brick digging** (Z/X keys) with 350ms cooldown between digs
+- **Player sprite:** small humanoid figure (head, body, legs, facing-direction eyes)
+- **Two enemy types:**
+  - **Red Runner:** tall angular figure, patrols horizontally, chases player on same row
+  - **Purple Grunter:** round figure, patrols when grounded, falls down holes
+- **Both enemies** use proper px/sec movement (no per-frame tile jumps) and bounce off walls/bricks
+- **Six gold pieces** scattered through the level
+- **Win condition:** collect all gold, reach top exit (col 14 row 7)
+- **Lose condition:** touch any enemy (collision uses TILE * 0.7 distance)
 
 ## What's NOT in v0.1
 
