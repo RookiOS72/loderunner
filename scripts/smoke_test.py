@@ -96,7 +96,10 @@ def main() -> int:
         # Pickup the first gold
         target = gold_positions[0]
         page.evaluate(f"window.__loderunner.setPlayerAt({target['col']}, {target['row']})")
-        picked = page.evaluate("window.__loderunner.pickupGold()")
+        picked = page.evaluate(
+            "(args) => { window.__loderunner.setPlayerAt(args.col, args.row); return window.__loderunner.pickupGold(); }",
+            {"col": target["col"], "row": target["row"]},
+        )
         assert picked is True, f"Pickup at gold position should succeed, got {picked!r}"
         gold_after = page.evaluate("window.__loderunner.getGold()")
         assert gold_after["collected"] == 1, f"Expected 1 gold collected, got {gold_after!r}"

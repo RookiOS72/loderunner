@@ -246,13 +246,28 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
     }
     // Hmm — that lets dy default to 0 if on ladder and on ground. Good.
 
-    // Apply horizontal movement if cell is passable
+    // Apply horizontal movement at proper px/sec rate.
+    // Use a fractional position (`player.xFrac` accumulates dt*speed)
+    // and snap to integer col when crossing a tile boundary.
     if (dx !== 0) {
-      const newCol = player.col + Math.sign(dx);
-      if (isPassableAt(newCol, player.row)) {
-        player.col = newCol;
-        player.x = player.col * TILE + TILE / 2;
+      e_pXMove:
+      player.xFrac = (player.xFrac || 0) + dx * PLAYER_SPEED * dt;
+      const stepCol = (dx > 0) ? Math.floor(player.xFrac / TILE) : Math.ceil(player.xFrac / TILE);
+      if (stepCol !== 0) {
+        const newCol = player.col + stepCol;
+        if (newCol >= 0 && newCol < COLS && isPassableAt(newCol, player.row)) {
+          player.col = newCol;
+          player.x = player.col * TILE + TILE / 2;
+          // Keep fractional part for smooth motion
+          if (dx > 0) player.xFrac -= stepCol * TILE;
+          else player.xFrac -= stepCol * TILE;
+        } else {
+          // Hit wall — clear fractional accumulator
+          player.xFrac = 0;
+        }
       }
+    } else {
+      player.xFrac = 0;  // reset when not moving
     }
     // Apply vertical movement
     if (dy !== 0) {
