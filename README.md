@@ -23,8 +23,10 @@ open index.html
 
 ## What's in v0.3
 
-- **All 150 original levels vendored** as data (`levels.js` / `levels/vglc-source/`) — not wired into the engine yet, so real play is still the single v0.2 level. See Files below.
+- **All 150 original levels vendored** as data (`levels.js` / `levels/vglc-source/`). Loadable via the debug hook below, but there's still no in-game level-select UI, so opening `index.html` and pressing Space plays the single v0.2 hand-crafted level by default.
 - **Rope tiles** (`~`): hand-over-hand bars from the original game. Standing on one suspends gravity — walk left/right freely — until you press Down to let go and drop through. Enemies hang on ropes the same way instead of falling through them, since several original levels route guard patrols along a rope.
+- **Real win condition.** Previously the exit tile did nothing — now reaching it with all gold collected wins the level. The 150 vendored levels don't have an explicit exit tile (that data's lost in the source corpus — see `scripts/build_levels.py`), so for those, reaching the top row with all gold collected wins instead, per the original manual's "climb to the top of the screen."
+- **Level progression.** Winning a level loaded via the debug hook advances to the next one on Space; losing retries the same level. Not yet built: brick holes refilling over time, guards dying/respawning when trapped in a refilling hole, or guards carrying gold — several of the 150 levels need that trap-and-recapture mechanic to be finishable.
 - Debug hook `window.__loderunner.loadLevel(id)` loads any of the 150 vendored levels by 1-based id, ahead of the real level-select UI.
 
 ## What's in v0.2
@@ -40,7 +42,7 @@ open index.html
   - **Purple Grunter:** round figure, patrols when grounded, falls down holes
 - **Both enemies** use proper px/sec movement (no per-frame tile jumps) and bounce off walls/bricks
 - **Six gold pieces** scattered through the level
-- **Win condition:** collect all gold, reach top exit (col 14 row 7)
+- **Win condition:** collect all gold, reach top exit (col 16 row 15) — note: this tile existed but did nothing until v0.3, see below
 - **Lose condition:** touch any enemy (collision uses TILE * 0.7 distance)
 
 ## What's NOT in v0.1

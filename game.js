@@ -92,6 +92,10 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
   // ---------------- State ----------------
   let level = [];
   let enemySpawns = [];
+  let levelHasExit = false;
+  // null while playing the placeholder LEVEL_ASCII level; a 1-based id
+  // into window.LEVELS while playing one of the 150 vendored levels.
+  let currentLevelId = null;
 
   const player = {
     col: 0, row: 0, x: 0, y: 0,
@@ -164,6 +168,10 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
   function isPassableAt(col, row) {
     const t = tileAt(col, row);
     return !(t === T_BRICK || t === T_SOLID);
+  }
+  function computeHasExit() {
+    for (const row of level) for (const t of row) if (t === T_EXIT) return true;
+    return false;
   }
 
   // ---------------- Enemy init ----------------
@@ -321,6 +329,19 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
     if (tileAt(player.col, player.row) === T_GOLD) {
       setTile(player.col, player.row, T_EMPTY);
       player.goldCollected++;
+    }
+
+    // Win check: only once all gold is collected. Levels with an exit
+    // tile need the player standing on it; the 150 vendored levels have
+    // no such tile (the original's "hidden ladder" nuance doesn't
+    // survive the source data), so for those reaching the top row
+    // stands in for "climb to the top of the screen," per the manual.
+    if (player.goldCollected >= player.goldTotal) {
+      if (levelHasExit) {
+        if (tileAt(player.col, player.row) === T_EXIT) triggerWin();
+      } else if (player.row === 0) {
+        triggerWin();
+      }
     }
     // Snap to tile center only at ladder touches or when movement stopped.
     // Otherwise player.x already tracks player.xFrac continuously.
@@ -619,7 +640,9 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
 
   // ---------------- State transitions ----------------
   function startGame() {
+    currentLevelId = null;
     level = parseLevel(LEVEL_ASCII);
+    levelHasExit = computeHasExit();
     resetPlayer();
     player.goldCollected = 0;
     player.goldTotal = countGold(level);
@@ -635,16 +658,39 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
     return n;
   }
 
+  // Loads one of the 150 vendored levels (levels.js) by 1-based id.
+  // Returns false (and leaves state untouched) if levels.js isn't
+  // loaded or id is out of range — callers fall back to startGame().
+  function loadLevelById(id) {
+    if (typeof window.LEVELS === 'undefined') return false;
+    const lv = window.LEVELS[id - 1];
+    if (!lv) return false;
+    currentLevelId = id;
+    if (lv.playerSpawn) PLAYER_SPAWN = { col: lv.playerSpawn.col, row: lv.playerSpawn.row };
+    level = parseLevel(lv.tiles);
+    levelHasExit = computeHasExit();
+    resetPlayer();
+    spawnEnemiesForLevel();
+    gameState = 'playing';
+    hideOverlay();
+    updateHud();
+    return true;
+  }
+
   function killPlayer() {
     player.alive = false;
     gameState = 'lost';
-    showOverlay(`<h2>CAUGHT</h2><p>You collected ${player.goldCollected}/${player.goldTotal} gold.</p><p class="hints"><kbd>SPACE</kbd> Try again</p>`);
+    const levelTag = currentLevelId !== null ? ` (level ${currentLevelId})` : '';
+    showOverlay(`<h2>CAUGHT</h2><p>You collected ${player.goldCollected}/${player.goldTotal} gold${levelTag}.</p><p class="hints"><kbd>SPACE</kbd> Try again</p>`);
     updateHud();
   }
 
   function triggerWin() {
     gameState = 'won';
-    showOverlay(`<h2>LEVEL CLEAR</h2><p>You collected all ${player.goldTotal} gold.</p><p class="hints"><kbd>SPACE</kbd> Restart</p>`);
+    const hasNext = currentLevelId !== null && typeof window.LEVELS !== 'undefined' && window.LEVELS[currentLevelId] !== undefined;
+    const hint = hasNext ? `<kbd>SPACE</kbd> Next level (${currentLevelId + 1}/${window.LEVELS.length})` : `<kbd>SPACE</kbd> Restart`;
+    const title = currentLevelId !== null && !hasNext ? 'ALL LEVELS CLEAR' : 'LEVEL CLEAR';
+    showOverlay(`<h2>${title}</h2><p>You collected all ${player.goldTotal} gold.</p><p class="hints">${hint}</p>`);
     updateHud();
   }
 
@@ -654,7 +700,14 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
     keys[e.code] = true;
     Audio.unlock();
     if (e.code === 'Space') {
-      if (gameState !== 'playing') startGame();
+      if (gameState !== 'playing') {
+        if (currentLevelId !== null) {
+          const nextId = (gameState === 'won') ? currentLevelId + 1 : currentLevelId;
+          if (!loadLevelById(nextId)) startGame(); // out of levels — back to the placeholder
+        } else {
+          startGame();
+        }
+      }
       e.preventDefault();
     }
     if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space'].includes(e.code)) {
@@ -720,27 +773,19 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
     },
     forceWin: () => { player.goldCollected = player.goldTotal; triggerWin(); },
     forceGameOver: () => { if (gameState === 'playing') killPlayer(); },
-    // Debug/test hook: load one of the 150 vendored levels (levels.js)
-    // by 1-based id, bypassing the not-yet-built level-select UI. Levels
-    // without a source player-spawn marker (currently just #150) keep
-    // whatever spawn was already set rather than guessing one.
-    loadLevel: (id) => {
-      if (typeof window.LEVELS === 'undefined') return false;
-      const lv = window.LEVELS[id - 1];
-      if (!lv) return false;
-      if (lv.playerSpawn) PLAYER_SPAWN = { col: lv.playerSpawn.col, row: lv.playerSpawn.row };
-      level = parseLevel(lv.tiles);
-      resetPlayer();
-      spawnEnemiesForLevel();
-      gameState = 'playing';
-      hideOverlay();
-      updateHud();
-      return true;
-    },
+    // Load one of the 150 vendored levels (levels.js) by 1-based id,
+    // bypassing the not-yet-built level-select UI. Levels without a
+    // source player-spawn marker (currently just #150) keep whatever
+    // spawn was already set rather than guessing one. Winning a level
+    // loaded this way advances SPACE to the next id automatically
+    // (see the keydown handler) instead of restarting the placeholder.
+    loadLevel: (id) => loadLevelById(id),
+    getCurrentLevelId: () => currentLevelId,
   };
 
   // ---------------- Boot ----------------
   level = parseLevel(LEVEL_ASCII);
+  levelHasExit = computeHasExit();
   player.goldTotal = countGold(level);
   updateHud();
   requestAnimationFrame(loop);
