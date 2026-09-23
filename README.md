@@ -60,6 +60,14 @@ Deferred to v0.2+:
 
 - `index.html` — page shell + HUD + canvas
 - `game.js` — engine + player + enemy AI + level + test hooks
+- `levels.js` — all 150 original levels, generated (see below); not yet
+  wired into the engine, which still runs on the single hand-crafted level
+- `levels/vglc-source/` — the 150 original levels, vendored verbatim as
+  plain-text tile grids from [TheVGLC](https://github.com/TheVGLC/TheVGLC)
+  (MIT), itself a transcription of the 1983 Broderbund release designed by
+  Douglas E. Smith
+- `scripts/build_levels.py` — converts `levels/vglc-source/` into
+  `levels.js`; re-run it after touching the source data
 - `scripts/smoke_test.py` — Playwright end-to-end test
 
 ## Test coverage
