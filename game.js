@@ -37,6 +37,7 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
   const T_EXIT        = 6;
   const T_RUNNER_SPAWN  = 7;
   const T_GRUNTER_SPAWN = 8;
+  const T_ROPE          = 9;
 
   const PLAYER_SPEED       = 60; // px/s — 2x enemies (RUNNER=35, GRUNTER=25)
   const PLAYER_CLIMB_SPEED = 50;
@@ -51,6 +52,8 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
   // ---------------- Level ----------------
   // '.' empty  '#' brick  '|' solid  'L' ladder
   // 'F' free ladder  'g' gold  'E' exit  'r' runner  'R' grunter
+  // '~' rope (hand-over-hand bar — hold position, no gravity, unless
+  //     the player presses Down to let go; see isRopeAt() usage below)
   // 
   // Layout notes:
   // - Two full vertical ladder columns at cols 1-2 and cols 17-18, running
@@ -84,7 +87,7 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
     "R ##  ######  ######  ######  ## ",   // row 20 main brick row (bottom)
     "  L                            L ",   // row 21 player spawn (ladders go down to here)
   ];
-  const PLAYER_SPAWN = { col: 2, row: 21 }; // on the left ladder
+  let PLAYER_SPAWN = { col: 2, row: 21 }; // on the left ladder; reassigned by loadLevel()
 
   // ---------------- State ----------------
   let level = [];
@@ -125,6 +128,7 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
           case '|': t = T_SOLID; break;
           case 'L': t = T_LADDER; break;
           case 'F': t = T_FREE_LADDER; break;
+          case '~': t = T_ROPE; break;
           case 'g': t = T_GOLD; goldCount++; break;
           case 'E': t = T_EXIT; break;
           case 'r': t = T_RUNNER_SPAWN; enemySpawns.push({ col, row, type: T_RUNNER_SPAWN }); break;
@@ -153,6 +157,9 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
   function isLadderAt(col, row) {
     const t = tileAt(col, row);
     return t === T_LADDER || t === T_FREE_LADDER;
+  }
+  function isRopeAt(col, row) {
+    return tileAt(col, row) === T_ROPE;
   }
   function isPassableAt(col, row) {
     const t = tileAt(col, row);
@@ -237,11 +244,17 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
       player.isClimbing = false;
     }
 
-    // Falling: if not on ladder and no solid below, fall down
-    if (!wantsClimb && !player.onLadder && !isSolidAt(player.col, player.row + 1)) {
+    // Rope: hanging on a rope tile suspends gravity (hand-over-hand
+    // lateral movement, same as the original), but pressing Down lets
+    // go on purpose and drops the player through it.
+    const onRope = isRopeAt(player.col, player.row);
+    const holdingRope = onRope && !player.onLadder && !wantsDown;
+
+    // Falling: if not on ladder, not holding a rope, and no solid below, fall down
+    if (!wantsClimb && !player.onLadder && !holdingRope && !isSolidAt(player.col, player.row + 1)) {
       player.isFalling = true;
       dy = 1;
-    } else if (isSolidAt(player.col, player.row + 1)) {
+    } else if (isSolidAt(player.col, player.row + 1) || holdingRope) {
       player.isFalling = false;
     }
     // Hmm — that lets dy default to 0 if on ladder and on ground. Good.
@@ -362,8 +375,11 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
       if (row < 0) row = 0;
       if (row >= ROWS) row = ROWS - 1;
 
-      // 1. Falling? If no solid below, fall at fall-speed px/s.
-      if (!isSolidAt(col, row + 1)) {
+      // 1. Falling? If no solid below and not hanging on a rope, fall at
+      // fall-speed px/s. Enemies hang on ropes the same as the player —
+      // several original levels rely on guards patrolling rope rows
+      // instead of dropping straight through them.
+      if (!isSolidAt(col, row + 1) && !isRopeAt(col, row)) {
         e.y += ENEMY_FALL_SPEED * dt;
         continue;
       }
@@ -415,6 +431,7 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
     [T_SOLID]: '#666',
     [T_LADDER]: '#fdba35',
     [T_FREE_LADDER]: '#fdba35',
+    [T_ROPE]: '#e0c090',
     [T_GOLD]: '#ffcc33',
     [T_EXIT]: '#aaff66',
   };
@@ -455,6 +472,21 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
       for (let r = 0; r < 5; r++) {
         ctx2d.fillRect(x + 2, y + r * (TILE / 4) + 2, TILE - 4, 2);
       }
+    } else if (t === T_ROPE) {
+      // Rope: a single taut horizontal line through the tile's vertical
+      // center, with a subtle shadow line beneath for depth.
+      ctx2d.strokeStyle = COLORS[T_ROPE];
+      ctx2d.lineWidth = 2;
+      ctx2d.beginPath();
+      ctx2d.moveTo(x, y + TILE / 2);
+      ctx2d.lineTo(x + TILE, y + TILE / 2);
+      ctx2d.stroke();
+      ctx2d.strokeStyle = 'rgba(0,0,0,0.3)';
+      ctx2d.lineWidth = 1;
+      ctx2d.beginPath();
+      ctx2d.moveTo(x, y + TILE / 2 + 2);
+      ctx2d.lineTo(x + TILE, y + TILE / 2 + 2);
+      ctx2d.stroke();
     } else if (t === T_GOLD) {
       // Gold: chunky irregular pile with a highlight
       ctx2d.fillStyle = COLORS[T_GOLD];
@@ -688,6 +720,23 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
     },
     forceWin: () => { player.goldCollected = player.goldTotal; triggerWin(); },
     forceGameOver: () => { if (gameState === 'playing') killPlayer(); },
+    // Debug/test hook: load one of the 150 vendored levels (levels.js)
+    // by 1-based id, bypassing the not-yet-built level-select UI. Levels
+    // without a source player-spawn marker (currently just #150) keep
+    // whatever spawn was already set rather than guessing one.
+    loadLevel: (id) => {
+      if (typeof window.LEVELS === 'undefined') return false;
+      const lv = window.LEVELS[id - 1];
+      if (!lv) return false;
+      if (lv.playerSpawn) PLAYER_SPAWN = { col: lv.playerSpawn.col, row: lv.playerSpawn.row };
+      level = parseLevel(lv.tiles);
+      resetPlayer();
+      spawnEnemiesForLevel();
+      gameState = 'playing';
+      hideOverlay();
+      updateHud();
+      return true;
+    },
   };
 
   // ---------------- Boot ----------------

@@ -21,6 +21,12 @@ open index.html
 | `X` | Dig to the right |
 | `Space` | Start / Restart |
 
+## What's in v0.3
+
+- **All 150 original levels vendored** as data (`levels.js` / `levels/vglc-source/`) — not wired into the engine yet, so real play is still the single v0.2 level. See Files below.
+- **Rope tiles** (`~`): hand-over-hand bars from the original game. Standing on one suspends gravity — walk left/right freely — until you press Down to let go and drop through. Enemies hang on ropes the same way instead of falling through them, since several original levels route guard patrols along a rope.
+- Debug hook `window.__loderunner.loadLevel(id)` loads any of the 150 vendored levels by 1-based id, ahead of the real level-select UI.
+
 ## What's in v0.2
 
 - Tile-based 16×16 retro graphics with classic Atari color palette (orange bricks with real brick-pattern mortar, yellow gold piles, green exit, yellow ladder rungs)
@@ -73,6 +79,14 @@ Deferred to v0.2+:
 ## Test coverage
 
 The smoke test verifies: page loads with no console errors, state transitions (menu → playing → won/lost), gold count matches the level, player can dig bricks, can collect gold, enemy contact triggers lost state, and 3 consecutive restart cycles all reach 'playing' state.
+
+To run it:
+
+```bash
+uv venv .venv && uv pip install --python .venv/bin/python playwright
+.venv/bin/playwright install chromium
+.venv/bin/python scripts/smoke_test.py
+```
 
 ## License
 
