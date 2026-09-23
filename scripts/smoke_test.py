@@ -2,13 +2,22 @@
 
 Uses Playwright to drive a headless Chromium and verify:
 - Page loads with no console errors
-- Pressing Space starts the game (state goes from 'menu' to 'playing')
-- Gold count matches the level definition (4 pieces)
-- Player can move left/right and dig bricks
+- Pressing Space at the menu starts the real campaign (level 1 of the
+  150 vendored levels), not the old placeholder
+- Gold count matches that level's data
+- Digging with Z targets one row BELOW the player (the floor underfoot),
+  not the player's own row — this is what makes the real levels
+  diggable at all; a same-row regression here would silently break them
 - Player can collect gold by walking onto it
 - Touching an enemy sends the game to 'lost' state
-- Reaching the exit with all gold triggers 'won' state
+- forceWin() reaches 'won' state
 - Multiple consecutive runs are reliable (no race conditions)
+
+This intentionally doesn't cover the hole-refill/trap-and-escape
+mechanic (see game.js HOLE_REFILL_MS / ENEMY_ESCAPE_MS) — that was
+verified with throwaway Playwright scripts during development instead,
+since it needs several seconds of real time per case; see the v0.3.3
+commit message for what was checked.
 
 Run with: python3 scripts/smoke_test.py
 """
@@ -63,24 +72,36 @@ def main() -> int:
         page.wait_for_timeout(300)
         state_after = page.evaluate("window.__loderunner.getState()")
         assert state_after == "playing", f"After Space, state should be 'playing', got {state_after!r}"
-        print(f"  ✓ after Space, state is {state_after!r}")
+        level_id = page.evaluate("window.__loderunner.getCurrentLevelId()")
+        assert level_id == 1, f"Space from the menu should launch the real level 1, got level id {level_id!r}"
+        print(f"  ✓ after Space, state is {state_after!r} on real level {level_id}")
 
-        # 3. Gold count is correct
+        # 3. Gold count matches the level's own data (avoids hardcoding a
+        # number that's a property of the vendored data, not the engine)
+        expected_gold = page.evaluate("window.LEVELS[0].goldTotal")
         gold = page.evaluate("window.__loderunner.getGold()")
-        assert gold == {"collected": 0, "total": 11}, f"Expected 11 gold pieces, got {gold!r}"
+        assert gold == {"collected": 0, "total": expected_gold}, f"Expected {expected_gold} gold pieces, got {gold!r}"
         print(f"  ✓ gold count = {gold['collected']}/{gold['total']}")
 
-        # 4. Player can dig a brick
-        # Stand next to a brick, dig it, verify tile becomes empty
-        page.evaluate("window.__loderunner.setPlayerAt(16, 20)")
-        dig_result = page.evaluate("window.__loderunner.digAt(17, 20)")
-        assert dig_result is True, f"Dig should succeed, got {dig_result!r}"
-        tile_after_dig = page.evaluate("window.__loderunner.getTile(17, 20)")
-        assert tile_after_dig == 0, f"Tile after dig should be empty, got {tile_after_dig!r}"
-        print(f"  ✓ dig at (17, 20) succeeded; tile is now empty")
+        # 4. Digging targets one row BELOW the player, not the player's
+        # own row. Move to the known spawn tile (17, 20) — a brick sits
+        # at (16, 21), diagonally below-left — and dig with the real Z
+        # key (not the digAt debug hook, which bypasses this logic
+        # entirely and so wouldn't catch a same-row regression).
+        page.evaluate("window.__loderunner.setPlayerAt(17, 20)")
+        same_row_before = page.evaluate("window.__loderunner.getTile(16, 20)")
+        below_before = page.evaluate("window.__loderunner.getTile(16, 21)")
+        assert below_before == 1, f"Expected a brick at (16,21) to dig, got tile {below_before!r}"
+        page.keyboard.down("KeyZ")
+        page.wait_for_timeout(150)
+        page.keyboard.up("KeyZ")
+        same_row_after = page.evaluate("window.__loderunner.getTile(16, 20)")
+        below_after = page.evaluate("window.__loderunner.getTile(16, 21)")
+        assert below_after == 0, f"Dig-left should clear the brick below-left (16,21), got {below_after!r}"
+        assert same_row_after == same_row_before, "Dig-left must not touch the player's own row"
+        print("  ✓ Z digs the brick diagonally below-left, not same-row")
 
         # 5. Player can collect gold by walking onto it
-        # Find gold positions and verify pickup
         gold_positions = page.evaluate("""() => {
             const result = [];
             for (let row = 0; row < 22; row++) {
@@ -92,8 +113,7 @@ def main() -> int:
             }
             return result;
         }""")
-        assert len(gold_positions) == 11, f"Expected 11 gold pieces in level, got {len(gold_positions)}"
-        # Pickup the first gold (single JS call to avoid update-loop race)
+        assert len(gold_positions) == expected_gold, f"Expected {expected_gold} gold tiles on the board, got {len(gold_positions)}"
         target = gold_positions[0]
         picked = page.evaluate(
             "(args) => window.__loderunner.pickupGold(args.col, args.row)",
@@ -104,13 +124,38 @@ def main() -> int:
         assert gold_after["collected"] == 1, f"Expected 1 gold collected, got {gold_after!r}"
         print(f"  ✓ pickup gold at ({target['col']}, {target['row']}); collected=1")
 
-        # 6. Enemy collision triggers 'lost' state
-        # Place player next to a known enemy spawn (col 0 has a grunter at row 21)
-        page.evaluate("window.__loderunner.setPlayerAt(0, 21)")
-        page.wait_for_timeout(800)  # let the grunter walk toward the player
+        # 6. Enemy collision triggers 'lost' state — walk the player onto
+        # a live enemy's own position rather than hardcoding a spawn
+        # tile, so this doesn't depend on which level is loaded. Enemies
+        # can have long fall shafts from their spawn tile, so poll until
+        # one has stopped FALLING (y stable — x keeps moving, since a
+        # grounded enemy still patrols horizontally by design) rather
+        # than guessing a fixed wait.
+        settled_index = None
+        for _ in range(20):
+            before = page.evaluate("window.__loderunner.getEnemyPositions()")
+            page.wait_for_timeout(150)
+            after = page.evaluate("window.__loderunner.getEnemyPositions()")
+            for i, a in enumerate(after):
+                if i < len(before) and before[i]["kind"] == a["kind"] and abs(before[i]["y"] - a["y"]) < 0.01:
+                    settled_index = i
+                    break
+            if settled_index is not None:
+                break
+        assert settled_index is not None, "No enemy stopped falling within the poll window"
+        # Land the player at the enemy's exact CURRENT pixel position —
+        # it's rarely tile-centered mid-patrol, and round-tripping
+        # through tile coordinates just to set the player loses that
+        # precision, so read it fresh right before setting.
+        pos = page.evaluate("window.__loderunner.getEnemyPositions()")[settled_index]
+        page.evaluate(
+            "(p) => window.__loderunner.setPlayerPixelAt(p.x, p.y)",
+            {"x": pos["x"], "y": pos["y"]},
+        )
+        page.wait_for_timeout(100)
         state = page.evaluate("window.__loderunner.getState()")
         assert state == "lost", f"Expected 'lost' after enemy contact, got {state!r}"
-        print(f"  ✓ enemy contact triggered 'lost' state")
+        print("  ✓ enemy contact triggered 'lost' state")
 
         # 7. Win state reachable
         page.evaluate("window.__loderunner.forceWin()")
@@ -118,13 +163,21 @@ def main() -> int:
         assert state_win == "won", f"forceWin should set 'won' state, got {state_win!r}"
         print(f"  ✓ forceWin triggered 'won' state")
 
-        # 8. Multiple game-restart cycles work
-        for cycle in range(3):
-            page.keyboard.press("Space")
-            page.wait_for_timeout(200)
-            state = page.evaluate("window.__loderunner.getState()")
-            assert state == "playing", f"After Space cycle {cycle}, expected 'playing', got {state!r}"
-        print("  ✓ 3 consecutive restart cycles all reached 'playing' state")
+        # 8. Winning advances to the next level on Space
+        page.keyboard.press("Space")
+        page.wait_for_timeout(200)
+        state2 = page.evaluate("window.__loderunner.getState()")
+        level_id2 = page.evaluate("window.__loderunner.getCurrentLevelId()")
+        assert state2 == "playing" and level_id2 == 2, f"Expected level 2 'playing' after winning level 1, got level {level_id2!r} / {state2!r}"
+        print("  ✓ winning a level then pressing Space advances to the next one")
+
+        # 9. Losing retries the SAME level (not level 1, not the placeholder)
+        page.evaluate("window.__loderunner.forceGameOver()")
+        page.keyboard.press("Space")
+        page.wait_for_timeout(200)
+        level_id3 = page.evaluate("window.__loderunner.getCurrentLevelId()")
+        assert level_id3 == 2, f"Expected a loss on level 2 to retry level 2, got {level_id3!r}"
+        print("  ✓ losing a level then pressing Space retries the same level")
 
         # Final check
         if console_errors:

@@ -49,6 +49,14 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
   const ENEMY_FALL_SPEED = 120;
   const ENEMY_RESPAWN_MS = 5000;
 
+  // A dug hole closes back up into a brick after this long. Anyone still
+  // standing in it when it closes dies — the player has no way to climb
+  // out, and an enemy that hasn't escaped by then gets caught. Enemies
+  // get a shorter window to climb back out on their own first, matching
+  // "guards can climb out of pits that do not close up around them."
+  const HOLE_REFILL_MS   = 4000;
+  const ENEMY_ESCAPE_MS  = 2500;
+
   // ---------------- Level ----------------
   // '.' empty  '#' brick  '|' solid  'L' ladder
   // 'F' free ladder  'g' gold  'E' exit  'r' runner  'R' grunter
@@ -96,6 +104,9 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
   // null while playing the placeholder LEVEL_ASCII level; a 1-based id
   // into window.LEVELS while playing one of the 150 vendored levels.
   let currentLevelId = null;
+  // Currently-open dug holes: { col, row, refillAt }. The tile grid
+  // itself just shows T_EMPTY at that spot in the meantime.
+  let digHoles = [];
 
   const player = {
     col: 0, row: 0, x: 0, y: 0,
@@ -173,6 +184,9 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
     for (const row of level) for (const t of row) if (t === T_EXIT) return true;
     return false;
   }
+  function holeAt(col, row) {
+    return digHoles.find(h => h.col === col && h.row === row);
+  }
 
   // ---------------- Enemy init ----------------
   function spawnEnemiesForLevel() {
@@ -194,6 +208,8 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
       state: 'patrol',
       respawnAt: 0,
       alive: true,
+      inHole: false,
+      trappedUntil: 0,
     };
   }
   function makeGrunter(col, row) {
@@ -205,6 +221,8 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
       state: 'patrol',
       respawnAt: 0,
       alive: true,
+      inHole: false,
+      trappedUntil: 0,
     };
   }
 
@@ -350,15 +368,19 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
       player.y = player.row * TILE + TILE / 2;
     }
 
-    // Dig bricks
+    // Dig bricks. Targets one row BELOW the player, diagonally — the
+    // floor you're standing over, not a wall beside you. (This was
+    // previously same-row, which only ever worked on the placeholder
+    // level's ladder-embedded floor rows; real levels put the floor
+    // under the walking row, so same-row digging couldn't reach it.)
     player.digCooldown = Math.max(0, player.digCooldown - dt);
     if (player.digCooldown <= 0) {
       if (keys['KeyZ']) {
-        if (tryDig(player.col - 1, player.row)) {
+        if (tryDig(player.col - 1, player.row + 1)) {
           player.digCooldown = DIG_RECHARGE_MS / 1000;
         }
       } else if (keys['KeyX']) {
-        if (tryDig(player.col + 1, player.row)) {
+        if (tryDig(player.col + 1, player.row + 1)) {
           player.digCooldown = DIG_RECHARGE_MS / 1000;
         }
       }
@@ -369,7 +391,31 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
     if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return false;
     if (level[row][col] !== T_BRICK) return false;
     setTile(col, row, T_EMPTY);
+    digHoles.push({ col, row, refillAt: performance.now() + HOLE_REFILL_MS });
     return true;
+  }
+
+  // Holes close back up after HOLE_REFILL_MS. Anyone still in one when
+  // it closes is caught by the refilling brick.
+  function updateHoles() {
+    if (digHoles.length === 0) return;
+    const now = performance.now();
+    for (let i = digHoles.length - 1; i >= 0; i--) {
+      const h = digHoles[i];
+      if (now < h.refillAt) continue;
+      for (const e of enemies) {
+        if (e.alive && e.col === h.col && e.row === h.row) killEnemyInHole(e);
+      }
+      if (player.alive && player.col === h.col && player.row === h.row) killPlayer();
+      setTile(h.col, h.row, T_BRICK);
+      digHoles.splice(i, 1);
+    }
+  }
+
+  function killEnemyInHole(e) {
+    e.alive = false;
+    e.inHole = false;
+    e.respawnAt = performance.now() + ENEMY_RESPAWN_MS;
   }
 
   // ---------------- Enemy update ----------------
@@ -395,6 +441,40 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
       let row = Math.round(e.y / TILE);
       if (row < 0) row = 0;
       if (row >= ROWS) row = ROWS - 1;
+      // If that landed us inside solid matter — most commonly an
+      // enemy free-falling all the way to a level's solid bottom row,
+      // where out-of-bounds-below reads as "solid" and made row=ROWS-1
+      // look like valid ground even though the row itself is brick —
+      // the real resting row is one above it. There's no valid "row"
+      // to occupy once you're inside a wall.
+      if (isSolidAt(col, row)) row -= 1;
+      // Keep the public col/row fields live every frame — previously
+      // these only updated once an enemy landed, so anything reading
+      // them (getEnemyPositions(), the trap check below) saw a stale
+      // spawn-time tile for an enemy that was still mid-fall.
+      e.col = col;
+      e.row = row;
+
+      // 0. Trapped in a dug hole? Enemies caught standing in an open
+      // hole are briefly harmless (skipped in the collision pass below)
+      // and try to climb back out after ENEMY_ESCAPE_MS. If the hole
+      // refills before they escape, updateHoles() kills them.
+      const inActiveHole = !!holeAt(col, row);
+      if (inActiveHole && !e.inHole) {
+        e.inHole = true;
+        e.trappedUntil = now + ENEMY_ESCAPE_MS;
+      } else if (!inActiveHole && e.inHole) {
+        e.inHole = false; // hole was dug elsewhere and this tile refilled/never held one
+      }
+      if (e.inHole) {
+        if (now >= e.trappedUntil && isPassableAt(col, row - 1)) {
+          e.y -= TILE; // climb out onto the tile above
+          e.inHole = false;
+          e.row = row - 1;
+        }
+        e.row = row;
+        continue; // frozen in the pit otherwise — no patrol/chase/fall
+      }
 
       // 1. Falling? If no solid below and not hanging on a rope, fall at
       // fall-speed px/s. Enemies hang on ropes the same as the player —
@@ -433,9 +513,10 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
       e.row = row;
     }
 
-    // Enemy-player collision
+    // Enemy-player collision — trapped enemies are safe to walk over,
+    // per the original ("safe for a moment to run over him").
     for (const e of enemies) {
-      if (!e.alive) continue;
+      if (!e.alive || e.inHole) continue;
       if (Math.abs(player.y - e.y) < TILE * 0.7 && Math.abs(player.x - e.x) < TILE * 0.7) {
         killPlayer();
         return;
@@ -643,6 +724,7 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
     currentLevelId = null;
     level = parseLevel(LEVEL_ASCII);
     levelHasExit = computeHasExit();
+    digHoles = [];
     resetPlayer();
     player.goldCollected = 0;
     player.goldTotal = countGold(level);
@@ -669,6 +751,7 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
     if (lv.playerSpawn) PLAYER_SPAWN = { col: lv.playerSpawn.col, row: lv.playerSpawn.row };
     level = parseLevel(lv.tiles);
     levelHasExit = computeHasExit();
+    digHoles = [];
     resetPlayer();
     spawnEnemiesForLevel();
     gameState = 'playing';
@@ -701,7 +784,11 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
     Audio.unlock();
     if (e.code === 'Space') {
       if (gameState !== 'playing') {
-        if (currentLevelId !== null) {
+        if (gameState === 'menu' && typeof window.LEVELS !== 'undefined') {
+          // First launch: play the real campaign (level 1 of 150) rather
+          // than the v0.2 placeholder, now that it's playable.
+          loadLevelById(1);
+        } else if (currentLevelId !== null) {
           const nextId = (gameState === 'won') ? currentLevelId + 1 : currentLevelId;
           if (!loadLevelById(nextId)) startGame(); // out of levels — back to the placeholder
         } else {
@@ -728,6 +815,7 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
       if (gameState === 'playing') {
         updatePlayer(dt);
         updateEnemies(dt);
+        updateHoles();
         updateHud();
       }
       render();
@@ -759,6 +847,28 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
       player.xFx = player.x;
       player.yFx = player.y;
     },
+    // Same idea as setPlayerAt, but pixel-exact — useful for tests that
+    // need to land the player precisely on a live enemy's current
+    // position, which is rarely tile-centered while it's patrolling.
+    setPlayerPixelAt: (x, y) => {
+      player.col = Math.round((x - TILE / 2) / TILE);
+      player.row = Math.round((y - TILE / 2) / TILE);
+      player.x = x; player.y = y;
+      player.xFx = x; player.yFx = y;
+    },
+    // Places a live enemy (by index into the alive-only list, matching
+    // getEnemyPositions()'s ordering) at an exact tile — for tests that
+    // need a deterministic trap/chase scenario rather than waiting on
+    // real patrol/fall timing.
+    setEnemyAt: (index, col, row) => {
+      const alive = enemies.filter(e => e.alive);
+      const e = alive[index];
+      if (!e) return false;
+      e.col = col; e.row = row;
+      e.x = col * TILE + TILE / 2; e.y = row * TILE + TILE / 2;
+      e.inHole = false;
+      return true;
+    },
     pickupGold: (col, row) => {
       // Accept explicit col/row to avoid race with player motion between
       // setPlayerAt and pickupGold calls.
@@ -786,6 +896,7 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
   // ---------------- Boot ----------------
   level = parseLevel(LEVEL_ASCII);
   levelHasExit = computeHasExit();
+    digHoles = [];
   player.goldTotal = countGold(level);
   updateHud();
   requestAnimationFrame(loop);

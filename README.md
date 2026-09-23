@@ -17,17 +17,18 @@ open index.html
 |---|---|
 | `←` `→` | Run left / right |
 | `↑` `↓` | Climb up / down ladder |
-| `Z` | Dig to the left |
-| `X` | Dig to the right |
-| `Space` | Start / Restart |
+| `Z` | Dig the brick diagonally below-left |
+| `X` | Dig the brick diagonally below-right |
+| `Space` | Start / Restart / Next level |
 
 ## What's in v0.3
 
-- **All 150 original levels vendored** as data (`levels.js` / `levels/vglc-source/`). Loadable via the debug hook below, but there's still no in-game level-select UI, so opening `index.html` and pressing Space plays the single v0.2 hand-crafted level by default.
-- **Rope tiles** (`~`): hand-over-hand bars from the original game. Standing on one suspends gravity — walk left/right freely — until you press Down to let go and drop through. Enemies hang on ropes the same way instead of falling through them, since several original levels route guard patrols along a rope.
-- **Real win condition.** Previously the exit tile did nothing — now reaching it with all gold collected wins the level. The 150 vendored levels don't have an explicit exit tile (that data's lost in the source corpus — see `scripts/build_levels.py`), so for those, reaching the top row with all gold collected wins instead, per the original manual's "climb to the top of the screen."
-- **Level progression.** Winning a level loaded via the debug hook advances to the next one on Space; losing retries the same level. Not yet built: brick holes refilling over time, guards dying/respawning when trapped in a refilling hole, or guards carrying gold — several of the 150 levels need that trap-and-recapture mechanic to be finishable.
-- Debug hook `window.__loderunner.loadLevel(id)` loads any of the 150 vendored levels by 1-based id, ahead of the real level-select UI.
+- **The real campaign is live.** Opening `index.html` and pressing Space now plays level 1 of the 150 original levels (vendored as data in `levels.js` / `levels/vglc-source/`), not the old placeholder. Winning advances to the next level on Space; losing retries the same one. The v0.2 hand-crafted level still exists in the code but isn't the default anymore.
+- **Fixed digging.** Z/X used to dig the brick beside the player's own row — a bug that only ever worked on the placeholder's specially-built layout. Real levels put the floor *below* the walking row, so digging now correctly targets diagonally below-left/right, matching the original.
+- **Rope tiles** (`~`): hand-over-hand bars. Standing on one suspends gravity — walk left/right freely — until you press Down to let go and drop through. Enemies hang on ropes too instead of falling through them.
+- **Real win condition.** Reaching the exit tile (placeholder level) or the top row (the 150 vendored levels, which have no exit tile in the source data) with all gold collected now actually wins — previously nothing did.
+- **The trap-and-recapture mechanic.** Dug holes close back up after ~4s; an enemy caught standing in one when it closes dies and respawns, but is safe to walk over while trapped, and gets ~2.5s to climb back out on its own first. This is load-bearing for the real levels — several require trapping a guard to get past it. Not yet built: guards carrying gold (so trapping one to *recover stolen gold* specifically isn't possible yet, only to get past it safely).
+- Debug hooks: `window.__loderunner.loadLevel(id)` jumps to any of the 150 levels by 1-based id; `setEnemyAt(index, col, row)` and `setPlayerPixelAt(x, y)` exist for deterministic tests.
 
 ## What's in v0.2
 
@@ -68,8 +69,8 @@ Deferred to v0.2+:
 
 - `index.html` — page shell + HUD + canvas
 - `game.js` — engine + player + enemy AI + level + test hooks
-- `levels.js` — all 150 original levels, generated (see below); not yet
-  wired into the engine, which still runs on the single hand-crafted level
+- `levels.js` — all 150 original levels, generated (see below); this is
+  what the game actually plays by default now
 - `levels/vglc-source/` — the 150 original levels, vendored verbatim as
   plain-text tile grids from [TheVGLC](https://github.com/TheVGLC/TheVGLC)
   (MIT), itself a transcription of the 1983 Broderbund release designed by
