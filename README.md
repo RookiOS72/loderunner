@@ -32,7 +32,8 @@ open index.html
 - **Gold-carrying guards.** Guards steal gold they walk over (the level can't be won until it's recovered); trapping one in a hole makes it drop what it's carrying, which reappears one tile above the pit.
 - **v0.3.6: removed the v0.2 placeholder level.** It was a hand-built single level used to get the engine off the ground before the real 150 were vendored — it's no longer reachable from anywhere in the UI (the menu is a level-select over the real 150), so it was dead weight. See "What was in v0.2" below for what it used to be.
 - **v0.3.7: sound**, synthesized via WebAudio (no audio files, same approach as the sibling [asteroids](https://github.com/RookiOS72/asteroids) project) — a thunk for digging, a chime for gold, a "gotcha" blip for trapping a guard, a poof when one dies in a refilling hole, and stingers for winning/losing a level. `M` mutes.
-- Debug hooks: `window.__loderunner.loadLevel(id)` jumps to any of the 150 levels by 1-based id; `setEnemyAt(index, col, row)` and `setPlayerPixelAt(x, y)` exist for deterministic tests.
+- **v0.3.8: progress persists.** The highest level you've cleared is saved to `localStorage` — the menu shows "Cleared: N/150" and defaults the picker to the next one, instead of always starting back at level 1 after closing the tab.
+- Debug hooks: `window.__loderunner.loadLevel(id)` jumps to any of the 150 levels by 1-based id; `setEnemyAt(index, col, row)` and `setPlayerPixelAt(x, y)` exist for deterministic tests; `getHighestCleared()` / `resetProgress()` for the saved-progress feature.
 
 ## What was in v0.2 (removed in v0.3.6)
 
@@ -51,7 +52,6 @@ Deferred to v0.2+:
 - Shareable-Level URLs (editor output → URL → load level)
 - Daily level (same seed for everyone)
 - Multiple player characters / skins
-- Save/load beyond URL sharing
 - Touch / mobile controls
 - Background animations
 

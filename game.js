@@ -67,6 +67,33 @@ anymore (removed in v0.3.6; see the README for what it used to be).
   // itself just shows T_EMPTY at that spot in the meantime.
   let digHoles = [];
 
+  // ---------------- Progress (localStorage) ----------------
+  // The only thing worth remembering across visits: how far you've
+  // gotten. Wrapped in try/catch since storage can throw (private
+  // browsing, disabled cookies/storage) — losing progress tracking
+  // isn't worth crashing the game over.
+  const PROGRESS_KEY = 'loderunner_progress';
+  let highestCleared = 0;
+
+  function loadProgress() {
+    try {
+      const raw = localStorage.getItem(PROGRESS_KEY);
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      if (Number.isInteger(data.highestCleared)) highestCleared = data.highestCleared;
+    } catch (err) {
+      // Storage unavailable or corrupt — just start fresh.
+    }
+  }
+
+  function saveProgress() {
+    try {
+      localStorage.setItem(PROGRESS_KEY, JSON.stringify({ highestCleared }));
+    } catch (err) {
+      // Storage unavailable — nothing to do, progress just won't persist.
+    }
+  }
+
   const player = {
     col: 0, row: 0, x: 0, y: 0,
     vx: 0, vy: 0,
@@ -682,17 +709,20 @@ anymore (removed in v0.3.6; see the README for what it used to be).
   }
 
   // The menu screen doubles as a level picker for the 150 vendored
-  // levels — Left/Right change the pick, Space starts it. Falls back to
-  // the v0.2 placeholder if levels.js somehow isn't loaded.
+  // levels — Left/Right change the pick, Space starts it.
   function renderMenuOverlay() {
     const total = (typeof window.LEVELS !== 'undefined') ? window.LEVELS.length : 0;
     const picker = total > 0
       ? `<p class="hints"><kbd>&larr;</kbd> <kbd>&rarr;</kbd> Level: ${String(selectedLevel).padStart(3, '0')} / ${total}</p>`
       : '';
+    const progress = highestCleared > 0
+      ? `<p class="hints">Cleared: ${highestCleared}/${total}</p>`
+      : '';
     showOverlay(`
       <h1>Lode Runner</h1>
       <p>Collect all the gold. Reach the top. Don't get caught.</p>
       ${picker}
+      ${progress}
       <p class="hints">
         <span><kbd>&uarr;</kbd> <kbd>&darr;</kbd> Climb</span>
         <span><kbd>Z</kbd> <kbd>X</kbd> Dig</span>
@@ -733,6 +763,10 @@ anymore (removed in v0.3.6; see the README for what it used to be).
 
   function triggerWin() {
     gameState = 'won';
+    if (currentLevelId !== null && currentLevelId > highestCleared) {
+      highestCleared = currentLevelId;
+      saveProgress();
+    }
     const hasNext = currentLevelId !== null && typeof window.LEVELS !== 'undefined' && window.LEVELS[currentLevelId] !== undefined;
     const hint = hasNext ? `<kbd>SPACE</kbd> Next level (${currentLevelId + 1}/${window.LEVELS.length})` : `<kbd>SPACE</kbd> Back to level select`;
     const title = currentLevelId !== null && !hasNext ? 'ALL LEVELS CLEAR' : 'LEVEL CLEAR';
@@ -871,6 +905,11 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     // spawn was already set rather than guessing one.
     loadLevel: (id) => loadLevelById(id),
     getCurrentLevelId: () => currentLevelId,
+    getHighestCleared: () => highestCleared,
+    resetProgress: () => {
+      highestCleared = 0;
+      try { localStorage.removeItem(PROGRESS_KEY); } catch (err) { /* ignore */ }
+    },
   };
 
   // ---------------- Boot ----------------
@@ -879,6 +918,13 @@ anymore (removed in v0.3.6; see the README for what it used to be).
   // a valid "nothing yet" level.
   level = parseLevel([]);
   digHoles = [];
+  loadProgress();
+  // Default the picker to the next level past your best, not always 1
+  // (clamped in case all 150 are already cleared).
+  if (highestCleared > 0) {
+    const total = (typeof window.LEVELS !== 'undefined') ? window.LEVELS.length : highestCleared;
+    selectedLevel = Math.min(highestCleared + 1, total);
+  }
   updateHud();
   renderMenuOverlay();
   requestAnimationFrame(loop);
