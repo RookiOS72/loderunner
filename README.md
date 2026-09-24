@@ -19,6 +19,7 @@ open index.html
 | `↑` `↓` | Climb up / down ladder |
 | `Z` | Dig the brick diagonally below-left |
 | `X` | Dig the brick diagonally below-right |
+| `M` | Mute / unmute |
 | `Space` | Start the picked level / Restart / Next level |
 
 ## What's in v0.3
@@ -30,6 +31,7 @@ open index.html
 - **The trap-and-recapture mechanic.** Dug holes close back up after ~4s; an enemy caught standing in one when it closes dies and respawns, but is safe to walk over while trapped, and gets ~2.5s to climb back out on its own first.
 - **Gold-carrying guards.** Guards steal gold they walk over (the level can't be won until it's recovered); trapping one in a hole makes it drop what it's carrying, which reappears one tile above the pit.
 - **v0.3.6: removed the v0.2 placeholder level.** It was a hand-built single level used to get the engine off the ground before the real 150 were vendored — it's no longer reachable from anywhere in the UI (the menu is a level-select over the real 150), so it was dead weight. See "What was in v0.2" below for what it used to be.
+- **v0.3.7: sound**, synthesized via WebAudio (no audio files, same approach as the sibling [asteroids](https://github.com/RookiOS72/asteroids) project) — a thunk for digging, a chime for gold, a "gotcha" blip for trapping a guard, a poof when one dies in a refilling hole, and stingers for winning/losing a level. `M` mutes.
 - Debug hooks: `window.__loderunner.loadLevel(id)` jumps to any of the 150 levels by 1-based id; `setEnemyAt(index, col, row)` and `setPlayerPixelAt(x, y)` exist for deterministic tests.
 
 ## What was in v0.2 (removed in v0.3.6)
@@ -48,7 +50,6 @@ Deferred to v0.2+:
 - Level editor (the original Atari 800XL version had one — this is the *missing feature*)
 - Shareable-Level URLs (editor output → URL → load level)
 - Daily level (same seed for everyone)
-- Sound design (the original Atari version was silent — sound is optional)
 - Multiple player characters / skins
 - Save/load beyond URL sharing
 - Touch / mobile controls
@@ -64,6 +65,7 @@ Deferred to v0.2+:
 
 - `index.html` — page shell + HUD + canvas
 - `game.js` — engine + player + enemy AI + level + test hooks
+- `audio.js` — synthesized sound effects (WebAudio, no audio files)
 - `levels.js` — all 150 original levels, generated (see below); the only
   level data the game plays now
 - `levels/vglc-source/` — the 150 original levels, vendored verbatim as

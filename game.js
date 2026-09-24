@@ -303,6 +303,7 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     if (tileAt(player.col, player.row) === T_GOLD) {
       setTile(player.col, player.row, T_EMPTY);
       player.goldCollected++;
+      Audio.gold();
     }
 
     // Win check: all gold collected, then reach the top row — the
@@ -343,6 +344,7 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     if (level[row][col] !== T_BRICK) return false;
     setTile(col, row, T_EMPTY);
     digHoles.push({ col, row, refillAt: performance.now() + HOLE_REFILL_MS });
+    Audio.dig();
     return true;
   }
 
@@ -367,6 +369,7 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     e.alive = false;
     e.inHole = false;
     e.respawnAt = performance.now() + ENEMY_RESPAWN_MS;
+    Audio.enemyDeath();
   }
 
   // ---------------- Enemy update ----------------
@@ -420,6 +423,7 @@ anymore (removed in v0.3.6; see the README for what it used to be).
       if (inActiveHole && !e.inHole) {
         e.inHole = true;
         e.trappedUntil = now + ENEMY_ESCAPE_MS;
+        Audio.trap();
         // Trapping releases any gold it was carrying — reappears one
         // tile above the pit, where the player who dug it is standing.
         // (Never drop it in the pit tile itself: the enemy is still
@@ -658,12 +662,6 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     renderPlayer(player.x, player.y);
   }
 
-  // ---------------- Audio (silent in v0.1) ----------------
-  const Audio = {
-    init() {},
-    unlock() {},
-  };
-
   // ---------------- HUD ----------------
   const elGold = document.getElementById('gold-count');
   const elStatus = document.getElementById('status');
@@ -698,6 +696,7 @@ anymore (removed in v0.3.6; see the README for what it used to be).
       <p class="hints">
         <span><kbd>&uarr;</kbd> <kbd>&darr;</kbd> Climb</span>
         <span><kbd>Z</kbd> <kbd>X</kbd> Dig</span>
+        <span><kbd>M</kbd> Mute</span>
       </p>
       <p class="hints" style="margin-top:1em"><kbd>SPACE</kbd> Start</p>
     `);
@@ -729,22 +728,30 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     const levelTag = currentLevelId !== null ? ` (level ${currentLevelId})` : '';
     showOverlay(`<h2>CAUGHT</h2><p>You collected ${player.goldCollected}/${player.goldTotal} gold${levelTag}.</p><p class="hints"><kbd>SPACE</kbd> Try again</p>`);
     updateHud();
+    Audio.playerDeath();
   }
 
   function triggerWin() {
     gameState = 'won';
     const hasNext = currentLevelId !== null && typeof window.LEVELS !== 'undefined' && window.LEVELS[currentLevelId] !== undefined;
-    const hint = hasNext ? `<kbd>SPACE</kbd> Next level (${currentLevelId + 1}/${window.LEVELS.length})` : `<kbd>SPACE</kbd> Restart`;
+    const hint = hasNext ? `<kbd>SPACE</kbd> Next level (${currentLevelId + 1}/${window.LEVELS.length})` : `<kbd>SPACE</kbd> Back to level select`;
     const title = currentLevelId !== null && !hasNext ? 'ALL LEVELS CLEAR' : 'LEVEL CLEAR';
     showOverlay(`<h2>${title}</h2><p>You collected all ${player.goldTotal} gold.</p><p class="hints">${hint}</p>`);
     updateHud();
+    Audio.win();
   }
 
   // ---------------- Input ----------------
   const keys = {};
+  let muted = false;
   window.addEventListener('keydown', (e) => {
     keys[e.code] = true;
     Audio.unlock();
+    if (e.code === 'KeyM') {
+      muted = !muted;
+      Audio.setMuted(muted);
+      return;
+    }
     if (e.code === 'Space') {
       if (gameState === 'menu') {
         // Play whichever of the 150 levels is currently picked in the
