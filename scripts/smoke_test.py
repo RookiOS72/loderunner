@@ -121,6 +121,19 @@ def main() -> int:
         assert same_row_after == same_row_before, "Dig-left must not touch the player's own row"
         print("  ✓ Z digs the brick diagonally below-left, not same-row")
 
+        # 4b. Falling into your own hole isn't a trap: you drop straight
+        # down the middle of the hole (not half-overlapping the wall, which
+        # is what happened when the left-going column lagged the sprite),
+        # and pushing toward a side hops you out onto the floor beside it.
+        # Walking left from (16,20) over the dug (15,21): fall in, then the
+        # held Left key climbs out the far side.
+        page.keyboard.down("ArrowLeft")
+        page.wait_for_timeout(700)
+        page.keyboard.up("ArrowLeft")
+        pit = page.evaluate("window.__loderunner.getPlayerPos()")
+        assert pit["row"] == 20 and pit["col"] <= 14, f"Should have hopped out of the pit and kept walking, got {pit!r}"
+        print("  ✓ falling into your own hole and climbing back out works")
+
         # 5. Player can collect gold by walking onto it
         gold_positions = page.evaluate("""() => {
             const result = [];

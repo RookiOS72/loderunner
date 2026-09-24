@@ -36,10 +36,10 @@ anymore (removed in v0.3.6; see the README for what it used to be).
   const ENEMY_RESPAWN_MS = 5000;
 
   // A dug hole closes back up into a brick after this long. Anyone still
-  // standing in it when it closes dies — the player has no way to climb
-  // out, and an enemy that hasn't escaped by then gets caught. Enemies
-  // get a shorter window to climb back out on their own first, matching
-  // "guards can climb out of pits that do not close up around them."
+  // standing in it when it closes dies. Guards get a shorter window to
+  // climb out on their own first, matching "guards can climb out of pits
+  // that do not close up around them"; the player can hop out at will by
+  // pushing toward a side (see the pit-escape block in updatePlayer).
   const HOLE_REFILL_MS   = 4000;
   const ENEMY_ESCAPE_MS  = 2500;
 
@@ -320,34 +320,47 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     if (!wantsClimb && !player.onLadder && !holdingRope && !isSolidAt(player.col, player.row + 1)) {
       player.isFalling = true;
       dy = 1;
+      // Fall straight down the middle of the column, like the original —
+      // no mid-air steering, and no landing half-overlapping a wall.
+      dx = 0;
+      player.xFx = player.x = player.col * TILE + TILE / 2;
     } else if (isSolidAt(player.col, player.row + 1) || holdingRope) {
       player.isFalling = false;
     }
     // Hmm — that lets dy default to 0 if on ladder and on ground. Good.
 
-    // Apply horizontal movement at proper px/sec rate.
-    // The KEY insight: track fractional pixel position (xFrac), and update
-    // player.x AND player.col BOTH from that fractional value. No more per-
-    // frame tile-snap — player.x equals player.xFx directly every frame.
+    // Climbing out of a pit: standing in a hole (a dug one, so its
+    // neighbours at this row are wall) and pushing toward a side hops up
+    // onto the floor beside it. The original manual says the runner can't
+    // climb out of a pit at all; in practice that just turned a slip into
+    // a death, so this is a deliberate, easy-to-revert softening.
+    if (dx !== 0 && !player.isFalling && holeAt(player.col, player.row)) {
+      const tc = player.col + dx, tr = player.row - 1;
+      if (isSolidAt(tc, player.row) && isPassableAt(tc, tr) && !isSolidAt(tc, tr)) {
+        player.col = tc; player.row = tr;
+        player.x = player.xFx = tc * TILE + TILE / 2;
+        player.y = player.yFx = tr * TILE + TILE / 2;
+        dx = 0;
+      }
+    }
+
+    // Horizontal movement at a fixed px/sec rate. The column is
+    // floor(centre / TILE) in BOTH directions (it used to be ceil going
+    // left, which made the column lag the sprite by up to half a tile and
+    // let you fall "half" into holes). Walls stop the centre at the middle
+    // of the current tile rather than snapping back each frame.
     if (dx !== 0) {
       if (player.xFx === undefined) player.xFx = player.x;
-      player.xFx += dx * PLAYER_SPEED * dt;
-      // Check if we crossed a tile boundary in the direction of motion.
-      // Compute previous tile index (from player.x) and current tile index
-      // (from xFrac). If they differ, we crossed a boundary.
-      const oldTile = (dx > 0) ? Math.floor(player.x / TILE) : Math.ceil(player.x / TILE);
-      const newTile = (dx > 0) ? Math.floor(player.xFx / TILE) : Math.ceil(player.xFx / TILE);
-      if (newTile !== oldTile) {
-        // Crossed a boundary. Check destination tile passability.
-        const newCol = (dx > 0) ? newTile : newTile;
-        if (newCol >= 0 && newCol < COLS && isPassableAt(newCol, player.row)) {
-          player.col = newCol;
-        } else {
-          // Wall — stop at the boundary
-          player.xFx = (dx > 0) ? (oldTile * TILE + TILE / 2) : (oldTile * TILE - TILE / 2);
-        }
+      let nx = player.xFx + dx * PLAYER_SPEED * dt;
+      const cur = Math.floor(player.x / TILE);
+      const next = cur + dx;
+      if (!(next >= 0 && next < COLS && isPassableAt(next, player.row))) {
+        const mid = cur * TILE + TILE / 2;
+        if ((dx > 0 && nx > mid) || (dx < 0 && nx < mid)) nx = mid;
       }
-      // Player.x is wherever xFrac ended up. Smooth, continuous.
+      player.xFx = nx;
+      const newTile = Math.floor(nx / TILE);
+      if (newTile !== cur && newTile >= 0 && newTile < COLS) player.col = newTile;
       player.x = player.xFx;
     } else {
       player.xFx = player.x;
@@ -521,12 +534,22 @@ anymore (removed in v0.3.6; see the README for what it used to be).
         e.inHole = false; // hole was dug elsewhere and this tile refilled/never held one
       }
       if (e.inHole) {
-        if (now >= e.trappedUntil && isPassableAt(col, row - 1)) {
-          e.y -= TILE; // climb out onto the tile above
-          e.inHole = false;
-          e.row = row - 1;
+        if (now >= e.trappedUntil) {
+          // Climb out onto the floor BESIDE the pit. (Straight up doesn't
+          // work: the empty hole tile below would drop it right back in.)
+          for (const dir of [e.facing, -e.facing]) {
+            const tc = col + dir, tr = row - 1;
+            if (isSolidAt(tc, row) && isPassableAt(tc, tr) && !isSolidAt(tc, tr)) {
+              e.x = tc * TILE + TILE / 2;
+              e.y = tr * TILE + TILE / 2;
+              e.col = tc; e.row = tr;
+              e.facing = dir;
+              e.inHole = false;
+              break;
+            }
+          }
         }
-        e.row = row;
+        if (e.inHole) e.row = row;
         continue; // frozen in the pit otherwise — no patrol/chase/fall
       }
 
