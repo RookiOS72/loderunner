@@ -210,6 +210,7 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
       alive: true,
       inHole: false,
       trappedUntil: 0,
+      carryingGold: false,
     };
   }
   function makeGrunter(col, row) {
@@ -223,6 +224,7 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
       alive: true,
       inHole: false,
       trappedUntil: 0,
+      carryingGold: false,
     };
   }
 
@@ -436,24 +438,30 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
         continue;
       }
 
-      // Determine current tile from pixel position. Snap rows to valid range.
-      let col = Math.round(e.x / TILE);
-      let row = Math.round(e.y / TILE);
+      // Determine current tile from pixel position. A tile-center pixel
+      // position is always exactly col*TILE + TILE/2 — a .5 fraction of
+      // TILE — so this MUST be floor(), not round(): round() ties break
+      // upward in JS and would put every entity sitting at its own
+      // tile's center into the tile one column/row over.
+      let col = Math.floor(e.x / TILE);
+      let row = Math.floor(e.y / TILE);
       if (row < 0) row = 0;
       if (row >= ROWS) row = ROWS - 1;
-      // If that landed us inside solid matter — most commonly an
-      // enemy free-falling all the way to a level's solid bottom row,
-      // where out-of-bounds-below reads as "solid" and made row=ROWS-1
-      // look like valid ground even though the row itself is brick —
-      // the real resting row is one above it. There's no valid "row"
-      // to occupy once you're inside a wall.
-      if (isSolidAt(col, row)) row -= 1;
       // Keep the public col/row fields live every frame — previously
       // these only updated once an enemy landed, so anything reading
       // them (getEnemyPositions(), the trap check below) saw a stale
       // spawn-time tile for an enemy that was still mid-fall.
       e.col = col;
       e.row = row;
+
+      // Guards steal gold they walk over — the level can't be won
+      // until it's recovered (win check only counts what the PLAYER
+      // has collected), which is the point: some levels require
+      // trapping a gold-carrying guard specifically.
+      if (tileAt(col, row) === T_GOLD && !e.carryingGold) {
+        setTile(col, row, T_EMPTY);
+        e.carryingGold = true;
+      }
 
       // 0. Trapped in a dug hole? Enemies caught standing in an open
       // hole are briefly harmless (skipped in the collision pass below)
@@ -463,6 +471,15 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
       if (inActiveHole && !e.inHole) {
         e.inHole = true;
         e.trappedUntil = now + ENEMY_ESCAPE_MS;
+        // Trapping releases any gold it was carrying — reappears one
+        // tile above the pit, where the player who dug it is standing.
+        // (Never drop it in the pit tile itself: the enemy is still
+        // standing there, so it would just get immediately re-picked-up
+        // next frame.)
+        if (e.carryingGold) {
+          e.carryingGold = false;
+          if (row - 1 >= 0) setTile(col, row - 1, T_GOLD);
+        }
       } else if (!inActiveHole && e.inHole) {
         e.inHole = false; // hole was dug elsewhere and this tile refilled/never held one
       }
@@ -499,7 +516,7 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
       // 4. Move horizontally at proper pixel/sec rate (no more per-frame tile jumps).
       const speed = e.kind === 'runner' ? RUNNER_SPEED : GRUNTER_SPEED;
       const nextX = e.x + dir * speed * dt;
-      let nextCol = Math.round(nextX / TILE);
+      let nextCol = Math.floor(nextX / TILE);
       // Bounce off walls and bricks
       if (nextCol < 0 || nextCol >= COLS) {
         e.facing = -dir;
@@ -672,6 +689,14 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
       ctx2d.fillStyle = '#000';
       ctx2d.fillRect(x + 5, y + 6, 1, 1);
       ctx2d.fillRect(x + 10, y + 6, 1, 1);
+    }
+    if (e.carryingGold) {
+      // Small gold glint above a guard that's stolen a piece — the
+      // level can't be won until this comes back.
+      ctx2d.fillStyle = '#ffcc33';
+      ctx2d.beginPath();
+      ctx2d.arc(x + TILE / 2, y - 2, 3, 0, Math.PI * 2);
+      ctx2d.fill();
     }
   }
 
