@@ -15,12 +15,33 @@ open index.html
 
 | Key | Action |
 |---|---|
-| `←` `→` | At the menu: pick a level (1–150). While playing: run left / right |
-| `↑` `↓` | Climb up / down ladder |
+| `←` `→` | At the menu: pick a level. While playing: run left / right. In the editor: move the cursor horizontally |
+| `↑` `↓` | Climb up / down ladder. In the editor: move the cursor vertically |
 | `Z` | Dig the brick diagonally below-left |
 | `X` | Dig the brick diagonally below-right |
 | `M` | Mute / unmute |
+| `E` | At the menu: open the level editor |
 | `Space` | Start the picked level / Restart / Next level |
+
+## Level editor
+
+Press `E` at the menu to open it. Move the cursor with the arrow keys, place a tile with a number key, then `T` to test-play or `S` to save. `Esc` returns to the menu.
+
+| Key | Tile |
+|---|---|
+| `1` | Empty |
+| `2` | Brick (diggable) |
+| `3` | Solid (undiggable) |
+| `4` | Ladder |
+| `5` | Rope |
+| `6` | Gold |
+| `7` | Runner spawn |
+| `8` | Grunter spawn |
+| `9` | Player spawn (exactly one; placing a new one moves it) |
+
+`T` and `S` both require a player spawn first. Saved levels are appended after the 150 official ones in the level-select (level 151 is your first save, and so on) and persist in `localStorage` — they play through the exact same engine as the originals, trap mechanic and all.
+
+Not yet built: shareable-level URLs (the saved level's data would need to round-trip through a URL, which is its own separate backlog item — see below), editing an already-saved level (you can only build a new one), deleting a saved level short of clearing `localStorage` by hand.
 
 ## What's in v0.3
 
@@ -33,7 +54,8 @@ open index.html
 - **v0.3.6: removed the v0.2 placeholder level.** It was a hand-built single level used to get the engine off the ground before the real 150 were vendored — it's no longer reachable from anywhere in the UI (the menu is a level-select over the real 150), so it was dead weight. See "What was in v0.2" below for what it used to be.
 - **v0.3.7: sound**, synthesized via WebAudio (no audio files, same approach as the sibling [asteroids](https://github.com/RookiOS72/asteroids) project) — a thunk for digging, a chime for gold, a "gotcha" blip for trapping a guard, a poof when one dies in a refilling hole, and stingers for winning/losing a level. `M` mutes.
 - **v0.3.8: progress persists.** The highest level you've cleared is saved to `localStorage` — the menu shows "Cleared: N/150" and defaults the picker to the next one, instead of always starting back at level 1 after closing the tab.
-- Debug hooks: `window.__loderunner.loadLevel(id)` jumps to any of the 150 levels by 1-based id; `setEnemyAt(index, col, row)` and `setPlayerPixelAt(x, y)` exist for deterministic tests; `getHighestCleared()` / `resetProgress()` for the saved-progress feature.
+- **v0.3.9: level editor.** Build a level tile-by-tile, test-play it, save it — saved levels extend the same 1-150 numbering (151, 152, ...) and play through the identical engine, so anything built in the editor gets the full trap mechanic, gold-carrying guards, and everything else for free. See "Level editor" above.
+- Debug hooks: `window.__loderunner.loadLevel(id)` jumps to any level (official or custom) by 1-based id; `setEnemyAt(index, col, row)` and `setPlayerPixelAt(x, y)` exist for deterministic tests; `getHighestCleared()` / `resetProgress()` for saved progress; `enterEditor()`, `editorKey(code)`, `getEditorState()`, `saveEditorLevelAs(name)`, `getCustomLevels()`, `clearCustomLevels()` for the editor.
 
 ## What was in v0.2 (removed in v0.3.6)
 
@@ -48,8 +70,7 @@ The very first playable milestone was a single hand-built level, before the real
 
 Deferred to v0.2+:
 
-- Level editor (the original Atari 800XL version had one — this is the *missing feature*)
-- Shareable-Level URLs (editor output → URL → load level)
+- Shareable-Level URLs (editor output → URL → load level — the editor landed in v0.3.9, this still hasn't)
 - Daily level (same seed for everyone)
 - Multiple player characters / skins
 - Touch / mobile controls
@@ -78,7 +99,7 @@ Deferred to v0.2+:
 
 ## Test coverage
 
-The smoke test verifies: page loads with no console errors, the menu's level-select (Left/Right pick, wraparound, Space starts the pick), gold count matches the picked level's own data, Z digs diagonally below-left (not the player's own row), gold pickup, enemy contact triggers 'lost', forceWin() reaches 'won', winning advances to the next level on Space, and losing retries the same level. It doesn't cover the hole-refill/trap-and-escape timing or gold-carrying guards (see game.js and recent commit messages for how those were checked separately).
+The smoke test verifies: page loads with no console errors, the menu's level-select (Left/Right pick, wraparound, Space starts the pick), gold count matches the picked level's own data, Z digs diagonally below-left (not the player's own row), gold pickup, enemy contact triggers 'lost', forceWin() reaches 'won', winning advances to the next level on Space, losing retries the same level, and the level editor (opens from the menu, refuses to test-play without a player spawn, tile placement, test-play returns to the editor on win instead of the campaign, saving plays back correctly as a level after the official 150). It doesn't cover the hole-refill/trap-and-escape timing or gold-carrying guards (see game.js and recent commit messages for how those were checked separately).
 
 To run it:
 

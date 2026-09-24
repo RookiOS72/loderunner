@@ -66,6 +66,21 @@ anymore (removed in v0.3.6; see the README for what it used to be).
   // Currently-open dug holes: { col, row, refillAt }. The tile grid
   // itself just shows T_EMPTY at that spot in the meantime.
   let digHoles = [];
+  // True while playing a level straight out of the editor (not yet
+  // saved) — winning/losing returns to the editor instead of trying to
+  // advance/retry a level id that may not exist.
+  let isTestPlay = false;
+
+  // ---------------- Level editor state ----------------
+  // '.' empty  '#' brick  '|' solid  'L' ladder  '~' rope  'g' gold
+  // 'r' runner spawn  'R' grunter spawn — same char scheme as the
+  // vendored levels, one key (1-8) per tile. '9' places the player
+  // spawn, which (like the vendored data) is tracked separately rather
+  // than as a grid character.
+  const EDITOR_PALETTE = ['.', '#', '|', 'L', '~', 'g', 'r', 'R'];
+  let editorTiles = [];       // array of ROWS arrays of COLS chars
+  let editorPlayerSpawn = null;
+  let editorCursor = { col: 0, row: 0 };
 
   // ---------------- Progress (localStorage) ----------------
   // The only thing worth remembering across visits: how far you've
@@ -92,6 +107,48 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     } catch (err) {
       // Storage unavailable — nothing to do, progress just won't persist.
     }
+  }
+
+  // ---------------- Custom levels (the level editor's output) ----------------
+  // Saved levels extend the same 1-based id space as the 150 official
+  // ones (151, 152, ...), so the existing level-select, progression,
+  // and win/lose flow all work on them unchanged — see getLevelById().
+  const CUSTOM_KEY = 'loderunner_custom_levels';
+  let customLevels = [];
+
+  function loadCustomLevels() {
+    try {
+      const raw = localStorage.getItem(CUSTOM_KEY);
+      customLevels = raw ? JSON.parse(raw) : [];
+    } catch (err) {
+      customLevels = [];
+    }
+  }
+
+  function saveCustomLevels() {
+    try {
+      localStorage.setItem(CUSTOM_KEY, JSON.stringify(customLevels));
+    } catch (err) {
+      // Storage unavailable — the level still works for this session,
+      // it just won't be there next visit.
+    }
+  }
+
+  function officialLevelCount() {
+    return (typeof window.LEVELS !== 'undefined') ? window.LEVELS.length : 0;
+  }
+
+  function totalLevelCount() {
+    return officialLevelCount() + customLevels.length;
+  }
+
+  // 1-based id -> level object, transparently spanning official + custom.
+  function getLevelById(id) {
+    const officialTotal = officialLevelCount();
+    if (id >= 1 && id <= officialTotal) return window.LEVELS[id - 1];
+    const customIndex = id - officialTotal - 1;
+    if (customIndex >= 0 && customIndex < customLevels.length) return customLevels[customIndex];
+    return null;
   }
 
   const player = {
@@ -681,12 +738,32 @@ anymore (removed in v0.3.6; see the README for what it used to be).
         renderTile(col, row, t, col * TILE, row * TILE);
       }
     }
+    if (gameState === 'editor') {
+      renderEditorOverlay();
+      return;
+    }
     // Enemies (drawn before player so player appears on top)
     for (const e of enemies) {
       if (e.alive) renderEnemy(e);
     }
     // Player
     renderPlayer(player.x, player.y);
+  }
+
+  function renderEditorOverlay() {
+    // Player-spawn marker
+    if (editorPlayerSpawn) {
+      renderPlayer(
+        editorPlayerSpawn.col * TILE + TILE / 2,
+        editorPlayerSpawn.row * TILE + TILE / 2
+      );
+    }
+    // Cursor: a pulsing-free simple highlight box
+    const x = editorCursor.col * TILE;
+    const y = editorCursor.row * TILE;
+    ctx2d.strokeStyle = '#ffffff';
+    ctx2d.lineWidth = 2;
+    ctx2d.strokeRect(x + 1, y + 1, TILE - 2, TILE - 2);
   }
 
   // ---------------- HUD ----------------
@@ -711,12 +788,15 @@ anymore (removed in v0.3.6; see the README for what it used to be).
   // The menu screen doubles as a level picker for the 150 vendored
   // levels — Left/Right change the pick, Space starts it.
   function renderMenuOverlay() {
-    const total = (typeof window.LEVELS !== 'undefined') ? window.LEVELS.length : 0;
+    const officialTotal = officialLevelCount();
+    const total = totalLevelCount();
+    const customNote = customLevels.length > 0
+      ? ` (${customLevels.length} custom)` : '';
     const picker = total > 0
-      ? `<p class="hints"><kbd>&larr;</kbd> <kbd>&rarr;</kbd> Level: ${String(selectedLevel).padStart(3, '0')} / ${total}</p>`
+      ? `<p class="hints"><kbd>&larr;</kbd> <kbd>&rarr;</kbd> Level: ${String(selectedLevel).padStart(3, '0')} / ${total}${customNote}</p>`
       : '';
     const progress = highestCleared > 0
-      ? `<p class="hints">Cleared: ${highestCleared}/${total}</p>`
+      ? `<p class="hints">Cleared: ${highestCleared}/${officialTotal}</p>`
       : '';
     showOverlay(`
       <h1>Lode Runner</h1>
@@ -727,20 +807,16 @@ anymore (removed in v0.3.6; see the README for what it used to be).
         <span><kbd>&uarr;</kbd> <kbd>&darr;</kbd> Climb</span>
         <span><kbd>Z</kbd> <kbd>X</kbd> Dig</span>
         <span><kbd>M</kbd> Mute</span>
+        <span><kbd>E</kbd> Level editor</span>
       </p>
       <p class="hints" style="margin-top:1em"><kbd>SPACE</kbd> Start</p>
     `);
   }
 
   // ---------------- State transitions ----------------
-  // Loads one of the 150 vendored levels (levels.js) by 1-based id.
-  // Returns false (and leaves state untouched) if levels.js isn't
-  // loaded or id is out of range.
-  function loadLevelById(id) {
-    if (typeof window.LEVELS === 'undefined') return false;
-    const lv = window.LEVELS[id - 1];
-    if (!lv) return false;
-    currentLevelId = id;
+  // Loads a level object directly (used by loadLevelById below, and by
+  // the editor's test-play, which has no id to look up yet).
+  function loadLevelObject(lv) {
     if (lv.playerSpawn) PLAYER_SPAWN = { col: lv.playerSpawn.col, row: lv.playerSpawn.row };
     level = parseLevel(lv.tiles);
     digHoles = [];
@@ -749,28 +825,117 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     gameState = 'playing';
     hideOverlay();
     updateHud();
+  }
+
+  // Loads a level (official or custom, see getLevelById) by 1-based id.
+  // Returns false (and leaves state untouched) if the id doesn't exist.
+  function loadLevelById(id) {
+    const lv = getLevelById(id);
+    if (!lv) return false;
+    isTestPlay = false;
+    currentLevelId = id;
+    loadLevelObject(lv);
     return true;
+  }
+
+  // ---------------- Level editor ----------------
+  function enterEditor(keepExisting) {
+    gameState = 'editor';
+    isTestPlay = false;
+    if (!keepExisting) {
+      editorTiles = Array.from({ length: ROWS }, () => Array(COLS).fill('.'));
+      editorPlayerSpawn = null;
+      editorCursor = { col: 0, row: 0 };
+    }
+    level = parseLevel(editorTiles.map(r => r.join('')));
+    digHoles = [];
+    hideOverlay();
+    elStatus.textContent = 'EDITOR';
+  }
+
+  // A brief status-line message that reverts back to "EDITOR" — the
+  // editor has no overlay of its own to show a bigger notice in.
+  function editorFlash(text, ms) {
+    elStatus.textContent = text;
+    setTimeout(() => { if (gameState === 'editor') elStatus.textContent = 'EDITOR'; }, ms);
+  }
+
+  function handleEditorKey(code) {
+    if (code === 'ArrowLeft') editorCursor.col = Math.max(0, editorCursor.col - 1);
+    else if (code === 'ArrowRight') editorCursor.col = Math.min(COLS - 1, editorCursor.col + 1);
+    else if (code === 'ArrowUp') editorCursor.row = Math.max(0, editorCursor.row - 1);
+    else if (code === 'ArrowDown') editorCursor.row = Math.min(ROWS - 1, editorCursor.row + 1);
+    else if (code === 'Digit9') {
+      editorPlayerSpawn = { col: editorCursor.col, row: editorCursor.row };
+    } else if (code.startsWith('Digit')) {
+      const n = parseInt(code.slice(5), 10);
+      if (n >= 1 && n <= EDITOR_PALETTE.length) {
+        editorTiles[editorCursor.row][editorCursor.col] = EDITOR_PALETTE[n - 1];
+        level = parseLevel(editorTiles.map(r => r.join('')));
+      }
+    } else if (code === 'KeyT') {
+      testPlayEditorLevel();
+    } else if (code === 'KeyS') {
+      saveEditorLevel();
+    } else if (code === 'Escape') {
+      gameState = 'menu';
+      renderMenuOverlay();
+    }
+  }
+
+  function testPlayEditorLevel() {
+    if (!editorPlayerSpawn) { editorFlash('PLACE PLAYER (9) FIRST', 1500); return; }
+    isTestPlay = true;
+    currentLevelId = null;
+    loadLevelObject({ tiles: editorTiles.map(r => r.join('')), playerSpawn: editorPlayerSpawn });
+  }
+
+  function saveEditorLevel() {
+    if (!editorPlayerSpawn) { editorFlash('PLACE PLAYER (9) FIRST', 1500); return; }
+    const name = window.prompt('Name this level:', `Custom ${customLevels.length + 1}`);
+    if (!name) return;
+    commitCustomLevel(name);
+  }
+
+  // Split out from saveEditorLevel so tests can save without going
+  // through window.prompt (which blocks waiting for a real dialog).
+  function commitCustomLevel(name) {
+    const tiles = editorTiles.map(r => r.join(''));
+    const flat = tiles.join('');
+    customLevels.push({
+      name,
+      tiles,
+      playerSpawn: editorPlayerSpawn,
+      goldTotal: (flat.match(/g/g) || []).length,
+      enemyCount: (flat.match(/[rR]/g) || []).length,
+    });
+    saveCustomLevels();
+    editorFlash('SAVED', 1200);
   }
 
   function killPlayer() {
     player.alive = false;
     gameState = 'lost';
     const levelTag = currentLevelId !== null ? ` (level ${currentLevelId})` : '';
-    showOverlay(`<h2>CAUGHT</h2><p>You collected ${player.goldCollected}/${player.goldTotal} gold${levelTag}.</p><p class="hints"><kbd>SPACE</kbd> Try again</p>`);
+    const hint = isTestPlay ? 'Back to editor' : 'Try again';
+    showOverlay(`<h2>CAUGHT</h2><p>You collected ${player.goldCollected}/${player.goldTotal} gold${levelTag}.</p><p class="hints"><kbd>SPACE</kbd> ${hint}</p>`);
     updateHud();
     Audio.playerDeath();
   }
 
   function triggerWin() {
     gameState = 'won';
-    if (currentLevelId !== null && currentLevelId > highestCleared) {
+    if (!isTestPlay && currentLevelId !== null
+        && currentLevelId <= officialLevelCount() && currentLevelId > highestCleared) {
       highestCleared = currentLevelId;
       saveProgress();
     }
-    const hasNext = currentLevelId !== null && typeof window.LEVELS !== 'undefined' && window.LEVELS[currentLevelId] !== undefined;
-    const hint = hasNext ? `<kbd>SPACE</kbd> Next level (${currentLevelId + 1}/${window.LEVELS.length})` : `<kbd>SPACE</kbd> Back to level select`;
-    const title = currentLevelId !== null && !hasNext ? 'ALL LEVELS CLEAR' : 'LEVEL CLEAR';
-    showOverlay(`<h2>${title}</h2><p>You collected all ${player.goldTotal} gold.</p><p class="hints">${hint}</p>`);
+    const hasNext = !isTestPlay && currentLevelId !== null && getLevelById(currentLevelId + 1) !== null;
+    const hint = isTestPlay ? 'Back to editor'
+      : hasNext ? `Next level (${currentLevelId + 1}/${totalLevelCount()})`
+      : 'Back to level select';
+    const title = (!isTestPlay && currentLevelId !== null && !hasNext) ? 'ALL LEVELS CLEAR' : 'LEVEL CLEAR';
+    showOverlay(`<h2>${title}</h2><p>You collected all ${player.goldTotal} gold.</p><p class="hints"><kbd>SPACE</kbd> ${hint}</p>`);
     updateHud();
     Audio.win();
   }
@@ -788,30 +953,41 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     }
     if (e.code === 'Space') {
       if (gameState === 'menu') {
-        // Play whichever of the 150 levels is currently picked in the
-        // menu's level-select.
+        // Play whichever level is currently picked in the level-select
+        // (official campaign or a saved custom one).
         loadLevelById(selectedLevel);
-      } else if (gameState === 'won') {
-        if (!loadLevelById(currentLevelId + 1)) {
-          // Cleared level 150 — back to the picker rather than falling
-          // off the end of the campaign.
-          gameState = 'menu';
-          renderMenuOverlay();
+      } else if (gameState === 'won' || gameState === 'lost') {
+        if (isTestPlay) {
+          enterEditor(true); // back to the level you were just testing
+        } else if (gameState === 'won') {
+          if (!loadLevelById(currentLevelId + 1)) {
+            // Cleared the last level — back to the picker rather than
+            // falling off the end of the campaign.
+            gameState = 'menu';
+            renderMenuOverlay();
+          }
+        } else {
+          loadLevelById(currentLevelId);
         }
-      } else if (gameState === 'lost') {
-        loadLevelById(currentLevelId);
       }
       e.preventDefault();
     }
-    // Level-select: only at the menu, and only when levels.js actually
-    // loaded. Left/Right otherwise mean "run" during play.
-    if (gameState === 'menu' && typeof window.LEVELS !== 'undefined'
+    if (gameState === 'menu' && e.code === 'KeyE') {
+      enterEditor(false);
+      return;
+    }
+    // Level-select: only at the menu. Left/Right otherwise mean "run"
+    // during play.
+    if (gameState === 'menu' && totalLevelCount() > 0
         && (e.code === 'ArrowLeft' || e.code === 'ArrowRight')) {
-      const total = window.LEVELS.length;
+      const total = totalLevelCount();
       selectedLevel += (e.code === 'ArrowRight') ? 1 : -1;
       if (selectedLevel < 1) selectedLevel = total;
       if (selectedLevel > total) selectedLevel = 1;
       renderMenuOverlay();
+    }
+    if (gameState === 'editor') {
+      handleEditorKey(e.code);
     }
     if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space'].includes(e.code)) {
       e.preventDefault();
@@ -910,6 +1086,26 @@ anymore (removed in v0.3.6; see the README for what it used to be).
       highestCleared = 0;
       try { localStorage.removeItem(PROGRESS_KEY); } catch (err) { /* ignore */ }
     },
+    // Level editor test hooks: drive it without real keyboard events.
+    enterEditor: (keepExisting) => enterEditor(!!keepExisting),
+    editorKey: (code) => handleEditorKey(code),
+    getEditorState: () => ({
+      tiles: editorTiles.map(r => r.join('')),
+      playerSpawn: editorPlayerSpawn,
+      cursor: { ...editorCursor },
+    }),
+    getCustomLevels: () => customLevels,
+    // Saves the in-progress editor level without going through
+    // window.prompt (which blocks waiting for a real dialog).
+    saveEditorLevelAs: (name) => {
+      if (!editorPlayerSpawn) return false;
+      commitCustomLevel(name);
+      return true;
+    },
+    clearCustomLevels: () => {
+      customLevels = [];
+      try { localStorage.removeItem(CUSTOM_KEY); } catch (err) { /* ignore */ }
+    },
   };
 
   // ---------------- Boot ----------------
@@ -919,11 +1115,11 @@ anymore (removed in v0.3.6; see the README for what it used to be).
   level = parseLevel([]);
   digHoles = [];
   loadProgress();
+  loadCustomLevels();
   // Default the picker to the next level past your best, not always 1
   // (clamped in case all 150 are already cleared).
   if (highestCleared > 0) {
-    const total = (typeof window.LEVELS !== 'undefined') ? window.LEVELS.length : highestCleared;
-    selectedLevel = Math.min(highestCleared + 1, total);
+    selectedLevel = Math.min(highestCleared + 1, officialLevelCount() || highestCleared);
   }
   updateHud();
   renderMenuOverlay();

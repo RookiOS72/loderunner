@@ -13,6 +13,11 @@ Uses Playwright to drive a headless Chromium and verify:
 - forceWin() reaches 'won' state
 - Winning advances to the next level on Space; losing retries the same
   one
+- The level editor: opens from the menu, refuses to test-play with no
+  player spawn placed, cursor movement + tile placement work, test-play
+  loads with no level id and returns to the editor (not the campaign)
+  on win, saving appends a custom level that plays back correctly right
+  after the official 150
 
 This intentionally doesn't cover the hole-refill/trap-and-escape
 mechanic, or gold-carrying guards (see game.js HOLE_REFILL_MS /
@@ -193,6 +198,55 @@ def main() -> int:
         level_id3 = page.evaluate("window.__loderunner.getCurrentLevelId()")
         assert level_id3 == 3, f"Expected a loss on level 3 to retry level 3, got {level_id3!r}"
         print("  ✓ losing a level then pressing Space retries the same level")
+
+        # 10. Level editor: build a tiny level, test-play it, save it, then
+        # play it back from the menu as a level extending the official 150.
+        # Reload first — there's no "quit to menu" key from mid-play, and
+        # we need a clean 'menu' state for KeyE to do anything.
+        page.reload()
+        page.wait_for_timeout(200)
+        page.keyboard.press("KeyE")
+        state_editor = page.evaluate("window.__loderunner.getState()")
+        assert state_editor == "editor", f"E at the menu should open the editor, got {state_editor!r}"
+
+        no_spawn_result = page.evaluate("window.__loderunner.editorKey('KeyT')")
+        state_no_spawn = page.evaluate("window.__loderunner.getState()")
+        assert state_no_spawn == "editor", "Test-play with no player spawn should refuse and stay in the editor"
+
+        page.evaluate("window.__loderunner.editorKey('Digit3')")  # solid at cursor (0,0)
+        page.evaluate("window.__loderunner.editorKey('ArrowRight')")
+        page.evaluate("window.__loderunner.editorKey('Digit6')")  # gold at (1,0)
+        page.evaluate("window.__loderunner.editorKey('ArrowRight')")
+        page.evaluate("window.__loderunner.editorKey('Digit9')")  # player spawn at (2,0)
+        editor_state = page.evaluate("window.__loderunner.getEditorState()")
+        assert editor_state["playerSpawn"] == {"col": 2, "row": 0}, f"Expected spawn at (2,0), got {editor_state['playerSpawn']!r}"
+        assert editor_state["tiles"][0][1] == "g", "Expected gold placed at (1,0)"
+        print("  ✓ editor: cursor movement and tile placement")
+
+        page.evaluate("window.__loderunner.editorKey('KeyT')")
+        state_test = page.evaluate("window.__loderunner.getState()")
+        id_test = page.evaluate("window.__loderunner.getCurrentLevelId()")
+        assert state_test == "playing" and id_test is None, f"Test-play should be 'playing' with no level id, got {state_test!r}/{id_test!r}"
+        page.evaluate("window.__loderunner.forceWin()")
+        page.keyboard.press("Space")
+        page.wait_for_timeout(100)
+        state_back = page.evaluate("window.__loderunner.getState()")
+        assert state_back == "editor", f"Winning a test-play level should return to the editor, got {state_back!r}"
+        print("  ✓ editor: test-play, then winning returns to the editor (not the campaign)")
+
+        saved = page.evaluate("window.__loderunner.saveEditorLevelAs('Smoke Test Level')")
+        assert saved is True, "Saving with a valid player spawn should succeed"
+        customs = page.evaluate("window.__loderunner.getCustomLevels()")
+        assert len(customs) == 1 and customs[0]["name"] == "Smoke Test Level"
+        page.evaluate("window.__loderunner.editorKey('Escape')")
+
+        official_total = page.evaluate("window.LEVELS.length")
+        loaded_custom = page.evaluate(f"window.__loderunner.loadLevel({official_total + 1})")
+        custom_id = page.evaluate("window.__loderunner.getCurrentLevelId()")
+        custom_gold = page.evaluate("window.__loderunner.getGold()")
+        assert loaded_custom and custom_id == official_total + 1, "Saved level should be playable right after the official 150"
+        assert custom_gold["total"] == 1, f"Expected the 1 placed gold, got {custom_gold!r}"
+        print(f"  ✓ editor: saved level plays back as level {custom_id} with correct data")
 
         # Final check
         if console_errors:
