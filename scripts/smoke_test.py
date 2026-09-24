@@ -261,6 +261,38 @@ def main() -> int:
         assert custom_gold["total"] == 1, f"Expected the 1 placed gold, got {custom_gold!r}"
         print(f"  ✓ editor: saved level plays back as level {custom_id} with correct data")
 
+        # 11. Ladder: holding Up at the top must stop at the walkway, not
+        # keep rising (the player used to float above it until Up was
+        # released). Level 1: ladder col 11 rises to the walkway at row 1,
+        # whose tile centre is y=24.
+        page.evaluate("window.__loderunner.loadLevel(1)")
+        page.evaluate("window.__loderunner.setPlayerAt(11, 6)")
+        page.keyboard.down("ArrowUp")
+        page.wait_for_timeout(2300)
+        top = page.evaluate("window.__loderunner.getPlayerPos()")
+        page.keyboard.up("ArrowUp")
+        assert top["row"] == 1 and abs(top["y"] - 24) < 0.5, f"Should rest on the walkway (row 1, y=24) while Up is held, got {top!r}"
+        print("  ✓ holding Up at the top of a ladder stops on the walkway (no floating)")
+
+        # 12. Two guards dropping gold into the same pit must not destroy
+        # any: the second drop used to overwrite the first, leaving the
+        # level unwinnable.
+        def gold_tiles():
+            return page.evaluate("""() => { let n = 0;
+                for (let r = 0; r < 22; r++) for (let c = 0; c < 32; c++)
+                    if (window.__loderunner.getTile(c, r) === 5) n++;
+                return n; }""")
+        page.evaluate("window.__loderunner.loadLevel(1)")
+        page.evaluate("window.__loderunner.setPlayerAt(0, 0)")
+        total = page.evaluate("window.__loderunner.getGold().total")
+        page.evaluate("window.__loderunner.setEnemyAt(0, 25, 5)"); page.wait_for_timeout(80)   # steals (25,5)
+        page.evaluate("window.__loderunner.digAt(25, 6)")
+        page.evaluate("window.__loderunner.setEnemyAt(0, 25, 6)"); page.wait_for_timeout(120)  # trapped, drops it
+        page.evaluate("window.__loderunner.setEnemyAt(1, 26, 9)"); page.wait_for_timeout(80)   # steals (26,9)
+        page.evaluate("window.__loderunner.setEnemyAt(1, 25, 6)"); page.wait_for_timeout(150)  # same pit, drops it too
+        assert gold_tiles() == total, f"Both dropped pieces must survive: {gold_tiles()} on board, expected {total}"
+        print("  ✓ two guards dropping gold into one pit loses nothing")
+
         # Final check
         if console_errors:
             print(f"\nUnexpected console errors: {console_errors}")

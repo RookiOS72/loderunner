@@ -365,33 +365,28 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     } else {
       player.xFx = player.x;
     }
-    // Apply vertical movement at proper px/sec rate, continuous motion.
-    // Same pattern as horizontal: track fractional pixel position (yFx),
-    // snap col on tile boundary.
+    // Vertical movement (climbing and falling). Same rules as horizontal:
+    // the row is floor(centre / TILE) both ways, and when the next row
+    // isn't enterable the centre is clamped to the middle of the current
+    // one. (It used to accumulate past the top of a ladder while Up was
+    // held, so you floated above the walkway until you let go.)
     if (dy !== 0) {
       if (player.yFx === undefined) player.yFx = player.y;
-      player.yFx += dy * PLAYER_CLIMB_SPEED * dt;
-      // Compute previous tile index from player.y, current tile from yFx.
-      const oldTile = (dy > 0) ? Math.floor(player.y / TILE) : Math.ceil(player.y / TILE);
-      const newTile = (dy > 0) ? Math.floor(player.yFx / TILE) : Math.ceil(player.yFx / TILE);
-      if (newTile !== oldTile) {
-        // Crossed a tile boundary. Check passability.
-        const newRow = (dy > 0) ? newTile : newTile;
-        let canMove = false;
-        if (wantsClimb) {
-          canMove = isLadderAt(player.col, player.row) || isLadderAt(player.col, newRow);
-        } else {
-          // Falling — check destination cell passable
-          canMove = isPassableAt(player.col, newRow) || isLadderAt(player.col, newRow);
-        }
-        if (newRow >= 0 && newRow < ROWS && canMove) {
-          player.row = newRow;
-        } else {
-          // Blocked — snap back to current tile center, reset accumulator
-          player.yFx = (dy > 0) ? (oldTile * TILE + TILE / 2) : (oldTile * TILE - TILE / 2);
-        }
+      const speed = player.isFalling ? PLAYER_FALL_SPEED : PLAYER_CLIMB_SPEED;
+      let ny = player.yFx + dy * speed * dt;
+      const cur = Math.floor(player.y / TILE);
+      const next = cur + dy;
+      let allowed = next >= 0 && next < ROWS && isPassableAt(player.col, next);
+      // Climbing needs a ladder here or in the row we're moving into.
+      if (wantsClimb) allowed = allowed && (isLadderAt(player.col, cur) || isLadderAt(player.col, next));
+      if (!allowed) {
+        const mid = cur * TILE + TILE / 2;
+        if ((dy > 0 && ny > mid) || (dy < 0 && ny < mid)) ny = mid;
       }
-      player.y = player.yFx;
+      player.yFx = ny;
+      const newRow = Math.floor(ny / TILE);
+      if (newRow !== cur && newRow >= 0 && newRow < ROWS) player.row = newRow;
+      player.y = ny;
     } else {
       player.yFx = player.y;
     }
@@ -462,10 +457,39 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     }
   }
 
+  // Where a guard's dropped gold can go: a tile that is truly free (empty,
+  // or just a spawn marker) so it never overwrites other gold, a ladder,
+  // or a rope. Prefers the tile straight above the pit (where the player
+  // who dug it is standing), then the nearest free tile around it, and
+  // prefers ones with floor underneath so the gold isn't floating.
+  function isFreeForGold(col, row) {
+    if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return false;
+    const t = level[row][col];
+    return t === T_EMPTY || t === T_RUNNER_SPAWN || t === T_GRUNTER_SPAWN;
+  }
+  function dropGoldNear(col, row) {
+    const cands = [];
+    for (let dy = -1; dy >= -4; dy--) {
+      for (const dx of [0, -1, 1, -2, 2]) cands.push([dx, dy]);
+    }
+    cands.sort((a, b) => (Math.abs(a[0]) + Math.abs(a[1])) - (Math.abs(b[0]) + Math.abs(b[1])));
+    for (const needFloor of [true, false]) {
+      for (const [dx, dy] of cands) {
+        const c = col + dx, r = row + dy;
+        if (!isFreeForGold(c, r)) continue;
+        if (needFloor && !isSolidAt(c, r + 1)) continue;
+        setTile(c, r, T_GOLD);
+        return true;
+      }
+    }
+    return false; // nowhere free — the guard keeps carrying it
+  }
+
   function killEnemyInHole(e) {
     e.alive = false;
     e.inHole = false;
     e.respawnAt = performance.now() + ENEMY_RESPAWN_MS;
+    if (e.carryingGold && dropGoldNear(e.col, e.row)) e.carryingGold = false;
     Audio.enemyDeath();
   }
 
@@ -481,6 +505,7 @@ anymore (removed in v0.3.6; see the README for what it used to be).
           const spawn = enemySpawns.find(s => s.type === (e.kind === 'runner' ? T_RUNNER_SPAWN : T_GRUNTER_SPAWN));
           if (spawn) {
             const fresh = e.kind === 'runner' ? makeRunner(spawn.col, spawn.row) : makeGrunter(spawn.col, spawn.row);
+            fresh.carryingGold = e.carryingGold; // never destroy stolen gold on respawn
             Object.assign(e, fresh);
           }
         }
@@ -526,10 +551,7 @@ anymore (removed in v0.3.6; see the README for what it used to be).
         // (Never drop it in the pit tile itself: the enemy is still
         // standing there, so it would just get immediately re-picked-up
         // next frame.)
-        if (e.carryingGold) {
-          e.carryingGold = false;
-          if (row - 1 >= 0) setTile(col, row - 1, T_GOLD);
-        }
+        if (e.carryingGold && dropGoldNear(col, row)) e.carryingGold = false;
       } else if (!inActiveHole && e.inHole) {
         e.inHole = false; // hole was dug elsewhere and this tile refilled/never held one
       }
