@@ -2,22 +2,24 @@
 
 Uses Playwright to drive a headless Chromium and verify:
 - Page loads with no console errors
-- Pressing Space at the menu starts the real campaign (level 1 of the
-  150 vendored levels), not the old placeholder
-- Gold count matches that level's data
+- The menu is a level-select for the 150 vendored levels: Left/Right
+  change the pick (with wraparound), Space starts whichever is picked
+- Gold count matches the picked level's own data
 - Digging with Z targets one row BELOW the player (the floor underfoot),
   not the player's own row — this is what makes the real levels
   diggable at all; a same-row regression here would silently break them
 - Player can collect gold by walking onto it
 - Touching an enemy sends the game to 'lost' state
 - forceWin() reaches 'won' state
-- Multiple consecutive runs are reliable (no race conditions)
+- Winning advances to the next level on Space; losing retries the same
+  one
 
 This intentionally doesn't cover the hole-refill/trap-and-escape
-mechanic (see game.js HOLE_REFILL_MS / ENEMY_ESCAPE_MS) — that was
-verified with throwaway Playwright scripts during development instead,
-since it needs several seconds of real time per case; see the v0.3.3
-commit message for what was checked.
+mechanic, or gold-carrying guards (see game.js HOLE_REFILL_MS /
+ENEMY_ESCAPE_MS / carryingGold) — those were verified with throwaway
+Playwright scripts during development instead, since the former needs
+several seconds of real time per case; see the v0.3.3/v0.3.4 commit
+messages for what was checked.
 
 Run with: python3 scripts/smoke_test.py
 """
@@ -68,36 +70,49 @@ def main() -> int:
         assert state_before == "menu", f"Initial state should be 'menu', got {state_before!r}"
         print(f"  ✓ initial state is {state_before!r}")
 
+        # 2b. The menu is a level-select: Left/Right pick a level (1-150,
+        # wrapping), Space starts whichever one is currently picked.
+        overlay_text = page.inner_text("#overlay-content")
+        assert "001" in overlay_text, f"Menu should show level 001 by default, got: {overlay_text!r}"
+        page.keyboard.press("ArrowRight")
+        page.keyboard.press("ArrowRight")
+        overlay_text = page.inner_text("#overlay-content")
+        assert "003" in overlay_text, f"Two ArrowRight presses should pick level 3, got: {overlay_text!r}"
+        page.keyboard.press("ArrowLeft")
+        overlay_text = page.inner_text("#overlay-content")
+        assert "002" in overlay_text, f"ArrowLeft should step back to level 2, got: {overlay_text!r}"
+        print("  ✓ menu level-select: Left/Right change the pick")
+
         page.keyboard.press("Space")
         page.wait_for_timeout(300)
         state_after = page.evaluate("window.__loderunner.getState()")
         assert state_after == "playing", f"After Space, state should be 'playing', got {state_after!r}"
         level_id = page.evaluate("window.__loderunner.getCurrentLevelId()")
-        assert level_id == 1, f"Space from the menu should launch the real level 1, got level id {level_id!r}"
-        print(f"  ✓ after Space, state is {state_after!r} on real level {level_id}")
+        assert level_id == 2, f"Space should launch the picked level (2), got level id {level_id!r}"
+        print(f"  ✓ after Space, state is {state_after!r} on picked level {level_id}")
 
         # 3. Gold count matches the level's own data (avoids hardcoding a
         # number that's a property of the vendored data, not the engine)
-        expected_gold = page.evaluate("window.LEVELS[0].goldTotal")
+        expected_gold = page.evaluate("window.LEVELS[1].goldTotal")
         gold = page.evaluate("window.__loderunner.getGold()")
         assert gold == {"collected": 0, "total": expected_gold}, f"Expected {expected_gold} gold pieces, got {gold!r}"
         print(f"  ✓ gold count = {gold['collected']}/{gold['total']}")
 
         # 4. Digging targets one row BELOW the player, not the player's
-        # own row. Move to the known spawn tile (17, 20) — a brick sits
-        # at (16, 21), diagonally below-left — and dig with the real Z
-        # key (not the digAt debug hook, which bypasses this logic
-        # entirely and so wouldn't catch a same-row regression).
-        page.evaluate("window.__loderunner.setPlayerAt(17, 20)")
-        same_row_before = page.evaluate("window.__loderunner.getTile(16, 20)")
-        below_before = page.evaluate("window.__loderunner.getTile(16, 21)")
-        assert below_before == 1, f"Expected a brick at (16,21) to dig, got tile {below_before!r}"
+        # own row. Level 2 spawns at (16, 20), with a brick at (15, 21)
+        # diagonally below-left — dig it with the real Z key (not the
+        # digAt debug hook, which bypasses this logic entirely and so
+        # wouldn't catch a same-row regression).
+        page.evaluate("window.__loderunner.setPlayerAt(16, 20)")
+        same_row_before = page.evaluate("window.__loderunner.getTile(15, 20)")
+        below_before = page.evaluate("window.__loderunner.getTile(15, 21)")
+        assert below_before == 1, f"Expected a brick at (15,21) to dig, got tile {below_before!r}"
         page.keyboard.down("KeyZ")
         page.wait_for_timeout(150)
         page.keyboard.up("KeyZ")
-        same_row_after = page.evaluate("window.__loderunner.getTile(16, 20)")
-        below_after = page.evaluate("window.__loderunner.getTile(16, 21)")
-        assert below_after == 0, f"Dig-left should clear the brick below-left (16,21), got {below_after!r}"
+        same_row_after = page.evaluate("window.__loderunner.getTile(15, 20)")
+        below_after = page.evaluate("window.__loderunner.getTile(15, 21)")
+        assert below_after == 0, f"Dig-left should clear the brick below-left (15,21), got {below_after!r}"
         assert same_row_after == same_row_before, "Dig-left must not touch the player's own row"
         print("  ✓ Z digs the brick diagonally below-left, not same-row")
 
@@ -168,7 +183,7 @@ def main() -> int:
         page.wait_for_timeout(200)
         state2 = page.evaluate("window.__loderunner.getState()")
         level_id2 = page.evaluate("window.__loderunner.getCurrentLevelId()")
-        assert state2 == "playing" and level_id2 == 2, f"Expected level 2 'playing' after winning level 1, got level {level_id2!r} / {state2!r}"
+        assert state2 == "playing" and level_id2 == 3, f"Expected level 3 'playing' after winning level 2, got level {level_id2!r} / {state2!r}"
         print("  ✓ winning a level then pressing Space advances to the next one")
 
         # 9. Losing retries the SAME level (not level 1, not the placeholder)
@@ -176,7 +191,7 @@ def main() -> int:
         page.keyboard.press("Space")
         page.wait_for_timeout(200)
         level_id3 = page.evaluate("window.__loderunner.getCurrentLevelId()")
-        assert level_id3 == 2, f"Expected a loss on level 2 to retry level 2, got {level_id3!r}"
+        assert level_id3 == 3, f"Expected a loss on level 3 to retry level 3, got {level_id3!r}"
         print("  ✓ losing a level then pressing Space retries the same level")
 
         # Final check

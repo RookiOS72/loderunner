@@ -104,6 +104,9 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
   // null while playing the placeholder LEVEL_ASCII level; a 1-based id
   // into window.LEVELS while playing one of the 150 vendored levels.
   let currentLevelId = null;
+  // Which level Space will start from the menu screen — changed with
+  // Left/Right while at the menu (see the level-select overlay below).
+  let selectedLevel = 1;
   // Currently-open dug holes: { col, row, refillAt }. The tile grid
   // itself just shows T_EMPTY at that spot in the meantime.
   let digHoles = [];
@@ -744,6 +747,26 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
     overlay.classList.add('hidden');
   }
 
+  // The menu screen doubles as a level picker for the 150 vendored
+  // levels — Left/Right change the pick, Space starts it. Falls back to
+  // the v0.2 placeholder if levels.js somehow isn't loaded.
+  function renderMenuOverlay() {
+    const total = (typeof window.LEVELS !== 'undefined') ? window.LEVELS.length : 0;
+    const picker = total > 0
+      ? `<p class="hints"><kbd>&larr;</kbd> <kbd>&rarr;</kbd> Level: ${String(selectedLevel).padStart(3, '0')} / ${total}</p>`
+      : '';
+    showOverlay(`
+      <h1>Lode Runner</h1>
+      <p>Collect all the gold. Reach the top. Don't get caught.</p>
+      ${picker}
+      <p class="hints">
+        <span><kbd>&uarr;</kbd> <kbd>&darr;</kbd> Climb</span>
+        <span><kbd>Z</kbd> <kbd>X</kbd> Dig</span>
+      </p>
+      <p class="hints" style="margin-top:1em"><kbd>SPACE</kbd> Start</p>
+    `);
+  }
+
   // ---------------- State transitions ----------------
   function startGame() {
     currentLevelId = null;
@@ -810,9 +833,9 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
     if (e.code === 'Space') {
       if (gameState !== 'playing') {
         if (gameState === 'menu' && typeof window.LEVELS !== 'undefined') {
-          // First launch: play the real campaign (level 1 of 150) rather
-          // than the v0.2 placeholder, now that it's playable.
-          loadLevelById(1);
+          // Play whichever of the 150 levels is currently picked in the
+          // menu's level-select, rather than always level 1.
+          loadLevelById(selectedLevel);
         } else if (currentLevelId !== null) {
           const nextId = (gameState === 'won') ? currentLevelId + 1 : currentLevelId;
           if (!loadLevelById(nextId)) startGame(); // out of levels — back to the placeholder
@@ -821,6 +844,16 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
         }
       }
       e.preventDefault();
+    }
+    // Level-select: only at the menu, and only when there's something
+    // to pick from. Left/Right otherwise mean "run" during play.
+    if (gameState === 'menu' && typeof window.LEVELS !== 'undefined'
+        && (e.code === 'ArrowLeft' || e.code === 'ArrowRight')) {
+      const total = window.LEVELS.length;
+      selectedLevel += (e.code === 'ArrowRight') ? 1 : -1;
+      if (selectedLevel < 1) selectedLevel = total;
+      if (selectedLevel > total) selectedLevel = 1;
+      renderMenuOverlay();
     }
     if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space'].includes(e.code)) {
       e.preventDefault();
@@ -921,8 +954,9 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
   // ---------------- Boot ----------------
   level = parseLevel(LEVEL_ASCII);
   levelHasExit = computeHasExit();
-    digHoles = [];
+  digHoles = [];
   player.goldTotal = countGold(level);
   updateHud();
+  renderMenuOverlay();
   requestAnimationFrame(loop);
 })();

@@ -15,19 +15,20 @@ open index.html
 
 | Key | Action |
 |---|---|
-| `←` `→` | Run left / right |
+| `←` `→` | At the menu: pick a level (1–150). While playing: run left / right |
 | `↑` `↓` | Climb up / down ladder |
 | `Z` | Dig the brick diagonally below-left |
 | `X` | Dig the brick diagonally below-right |
-| `Space` | Start / Restart / Next level |
+| `Space` | Start the picked level / Restart / Next level |
 
 ## What's in v0.3
 
-- **The real campaign is live.** Opening `index.html` and pressing Space now plays level 1 of the 150 original levels (vendored as data in `levels.js` / `levels/vglc-source/`), not the old placeholder. Winning advances to the next level on Space; losing retries the same one. The v0.2 hand-crafted level still exists in the code but isn't the default anymore.
+- **The real campaign is live**, and you can now actually pick a level: the menu screen doubles as a level-select for all 150 original levels (Left/Right to pick, Space to start) — vendored as data in `levels.js` / `levels/vglc-source/`. Winning advances to the next level on Space; losing retries the same one. The v0.2 hand-crafted level still exists in the code but isn't the default anymore.
 - **Fixed digging.** Z/X used to dig the brick beside the player's own row — a bug that only ever worked on the placeholder's specially-built layout. Real levels put the floor *below* the walking row, so digging now correctly targets diagonally below-left/right, matching the original.
 - **Rope tiles** (`~`): hand-over-hand bars. Standing on one suspends gravity — walk left/right freely — until you press Down to let go and drop through. Enemies hang on ropes too instead of falling through them.
 - **Real win condition.** Reaching the exit tile (placeholder level) or the top row (the 150 vendored levels, which have no exit tile in the source data) with all gold collected now actually wins — previously nothing did.
-- **The trap-and-recapture mechanic.** Dug holes close back up after ~4s; an enemy caught standing in one when it closes dies and respawns, but is safe to walk over while trapped, and gets ~2.5s to climb back out on its own first. This is load-bearing for the real levels — several require trapping a guard to get past it. Not yet built: guards carrying gold (so trapping one to *recover stolen gold* specifically isn't possible yet, only to get past it safely).
+- **The trap-and-recapture mechanic.** Dug holes close back up after ~4s; an enemy caught standing in one when it closes dies and respawns, but is safe to walk over while trapped, and gets ~2.5s to climb back out on its own first.
+- **Gold-carrying guards.** Guards steal gold they walk over (the level can't be won until it's recovered); trapping one in a hole makes it drop what it's carrying, which reappears one tile above the pit.
 - Debug hooks: `window.__loderunner.loadLevel(id)` jumps to any of the 150 levels by 1-based id; `setEnemyAt(index, col, row)` and `setPlayerPixelAt(x, y)` exist for deterministic tests.
 
 ## What's in v0.2
