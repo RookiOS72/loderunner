@@ -10,8 +10,8 @@ anymore (removed in v0.3.6; see the README for what it used to be).
 
   // ---------------- Constants ----------------
   const TILE = 16;
-  const COLS = 32;
-  const ROWS = 22;
+  const COLS = 28;   // the Apple II original's 28x16 board
+  const ROWS = 16;
   const CANVAS_W = COLS * TILE;
   const CANVAS_H = ROWS * TILE;
 
@@ -24,6 +24,7 @@ anymore (removed in v0.3.6; see the README for what it used to be).
   const T_RUNNER_SPAWN  = 7;
   const T_GRUNTER_SPAWN = 8;
   const T_ROPE          = 9;
+  const T_TRAP          = 10; // looks like brick, but you fall through it
 
   const PLAYER_SPEED       = 60; // px/s — 2x enemies (RUNNER=35, GRUNTER=25)
   const PLAYER_CLIMB_SPEED = 50;
@@ -45,7 +46,8 @@ anymore (removed in v0.3.6; see the README for what it used to be).
 
   // ---------------- Level ----------------
   // '.' empty  '#' brick  '|' solid  'L' ladder
-  // 'F' free ladder  'g' gold  'r' runner  'R' grunter
+  // 'S' hidden ladder (invisible until all gold is collected)  'X' trapdoor
+  // 'g' gold  'r' guard  'R' grunter
   // '~' rope (hand-over-hand bar — hold position, no gravity, unless
   //     the player presses Down to let go; see isRopeAt() usage below)
   //
@@ -73,8 +75,9 @@ anymore (removed in v0.3.6; see the README for what it used to be).
 
   // ---------------- Level editor state ----------------
   // '.' empty  '#' brick  '|' solid  'L' ladder  '~' rope  'g' gold
-  // 'r' runner spawn  'R' grunter spawn — same char scheme as the
-  // vendored levels, one key (1-8) per tile. '9' places the player
+  // 'r' guard spawn  'R' grunter spawn — same char scheme as the vendored
+  // levels, one key (1-8) per tile; 0 places a trapdoor ('X') and H a
+  // hidden ladder ('S'). '9' places the player
   // spawn, which (like the vendored data) is tracked separately rather
   // than as a grid character.
   const EDITOR_PALETTE = ['.', '#', '|', 'L', '~', 'g', 'r', 'R'];
@@ -185,7 +188,8 @@ anymore (removed in v0.3.6; see the README for what it used to be).
           case '#': t = T_BRICK; break;
           case '|': t = T_SOLID; break;
           case 'L': t = T_LADDER; break;
-          case 'F': t = T_FREE_LADDER; break;
+          case 'F': case 'S': t = T_FREE_LADDER; break;   // hidden ladder
+          case 'X': t = T_TRAP; break;
           case '~': t = T_ROPE; break;
           case 'g': t = T_GOLD; goldCount++; break;
           case 'r': t = T_RUNNER_SPAWN; enemySpawns.push({ col, row, type: T_RUNNER_SPAWN }); break;
@@ -211,9 +215,15 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     const t = tileAt(col, row);
     return t === T_BRICK || t === T_SOLID;
   }
+  // The hidden ladders (the original's "ladder that appears after getting
+  // all gold") only exist once every piece of gold is collected. Guards
+  // carrying gold count as not yet collected, so trapping them matters.
+  function laddersRevealed() {
+    return player.goldTotal > 0 && player.goldCollected >= player.goldTotal;
+  }
   function isLadderAt(col, row) {
     const t = tileAt(col, row);
-    return t === T_LADDER || t === T_FREE_LADDER;
+    return t === T_LADDER || (t === T_FREE_LADDER && laddersRevealed());
   }
   function isRopeAt(col, row) {
     return tileAt(col, row) === T_ROPE;
@@ -278,6 +288,7 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     player.isClimbing = false;
     player.isFalling = false;
     player.digCooldown = 0;
+    player.laddersShown = false;
     player.alive = true;
     player.goldCollected = 0;
   }
@@ -643,7 +654,7 @@ anymore (removed in v0.3.6; see the README for what it used to be).
   };
 
   function renderTile(col, row, t, x, y) {
-    if (t === T_BRICK) {
+    if (t === T_BRICK || t === T_TRAP) {   // a trapdoor looks exactly like brick
       // Brick body
       ctx2d.fillStyle = COLORS[T_BRICK];
       ctx2d.fillRect(x, y, TILE, TILE);
@@ -671,16 +682,23 @@ anymore (removed in v0.3.6; see the README for what it used to be).
       ctx2d.fillStyle = 'rgba(255,255,255,0.06)';
       ctx2d.fillRect(x, y, TILE, 4);
     } else if (t === T_LADDER || t === T_FREE_LADDER) {
+      // Hidden ladders are invisible until all the gold is collected (the
+      // editor shows them faintly so you can place them).
+      const hidden = t === T_FREE_LADDER && !laddersRevealed();
+      if (hidden && gameState !== 'editor') return;
       // Ladder: 2 vertical rails + 5 horizontal rungs
-      ctx2d.fillStyle = COLORS[t];
+      ctx2d.save();
+      if (hidden) ctx2d.globalAlpha = 0.35;
+      ctx2d.fillStyle = COLORS[T_LADDER];
       ctx2d.fillRect(x + 2, y, 2, TILE);
       ctx2d.fillRect(x + TILE - 4, y, 2, TILE);
       for (let r = 0; r < 5; r++) {
         ctx2d.fillRect(x + 2, y + r * (TILE / 4) + 2, TILE - 4, 2);
       }
+      ctx2d.restore();
     } else if (t === T_ROPE) {
-      // Rope: a single taut horizontal line through the tile's vertical
-      // top (where a hanging character's hands meet it), with a subtle shadow line beneath.
+      // Rope: a single taut horizontal line near the top of the tile (where
+      // a hanging character's hands meet it), with a subtle shadow beneath.
       ctx2d.strokeStyle = COLORS[T_ROPE];
       ctx2d.lineWidth = 2;
       ctx2d.beginPath();
@@ -849,7 +867,9 @@ anymore (removed in v0.3.6; see the README for what it used to be).
 
   function updateHud() {
     elGold.textContent = `GOLD: ${player.goldCollected}/${player.goldTotal}`;
-    elStatus.textContent = gameState.toUpperCase();
+    elStatus.textContent = (gameState === 'playing' && laddersRevealed())
+      ? 'ALL GOLD — CLIMB OUT THE TOP'
+      : gameState.toUpperCase();
   }
 
   function showOverlay(html) {
@@ -940,6 +960,10 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     else if (code === 'ArrowRight') editorCursor.col = Math.min(COLS - 1, editorCursor.col + 1);
     else if (code === 'ArrowUp') editorCursor.row = Math.max(0, editorCursor.row - 1);
     else if (code === 'ArrowDown') editorCursor.row = Math.min(ROWS - 1, editorCursor.row + 1);
+    else if (code === 'Digit0' || code === 'KeyH') {
+      editorTiles[editorCursor.row][editorCursor.col] = (code === 'Digit0') ? 'X' : 'S';
+      level = parseLevel(editorTiles.map(r => r.join('')));
+    }
     else if (code === 'Digit9') {
       editorPlayerSpawn = { col: editorCursor.col, row: editorCursor.row };
     } else if (code.startsWith('Digit')) {
@@ -1085,6 +1109,10 @@ anymore (removed in v0.3.6; see the README for what it used to be).
         const moved = Math.abs(player.x - ox) + Math.abs(player.y - oy);
         player.animDist = (player.animDist || 0) + moved;
         player.moved = moved > 0.01;
+        if (!player.laddersShown && laddersRevealed()) {
+          player.laddersShown = true;
+          if (level.some(r => r.includes(T_FREE_LADDER))) Audio.reveal();
+        }
         updateEnemies(dt);
         updateHoles();
         updateHud();
@@ -1161,6 +1189,7 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     loadLevel: (id) => loadLevelById(id),
     getCurrentLevelId: () => currentLevelId,
     getHighestCleared: () => highestCleared,
+    getLaddersRevealed: () => laddersRevealed(),
     resetProgress: () => {
       highestCleared = 0;
       try { localStorage.removeItem(PROGRESS_KEY); } catch (err) { /* ignore */ }

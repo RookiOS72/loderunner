@@ -13,6 +13,9 @@ Uses Playwright to drive a headless Chromium and verify:
 - forceWin() reaches 'won' state
 - Winning advances to the next level on Space; losing retries the same
   one
+- Hidden ladders appear when all gold is collected and climbing out wins;
+  trapdoors drop you through; falling into your own hole is survivable;
+  holding Up at a ladder top doesn't float; double gold drops lose nothing
 - The level editor: opens from the menu, refuses to test-play with no
   player spawn placed, cursor movement + tile placement work, test-play
   loads with no level id and returns to the editor (not the campaign)
@@ -35,6 +38,55 @@ import sys
 from pathlib import Path
 
 INDEX = Path(__file__).parent.parent / "index.html"
+
+
+def find_pit_spot(levels):
+    """(level, col, row): stand at (col,row); digging left opens (col-1,row+1),
+    a real pit (floor beneath it) whose far wall (col-2) has open floor to
+    hop out onto. Read from the level data so the test survives level edits."""
+    for lid, t in enumerate(levels, 1):
+        for r in range(1, len(t) - 2):
+            for c in range(3, len(t[0]) - 1):
+                if (t[r][c] == "." and t[r][c - 1] == "." and t[r][c - 2] == "."
+                        and t[r + 1][c] in "#|" and t[r + 1][c - 1] == "#" and t[r + 2][c - 1] in "#|"
+                        and t[r + 1][c - 2] in "#|"):
+                    return lid, c, r
+    raise AssertionError("no level has a diggable pit spot")
+
+
+def find_ladder_top(levels):
+    """(level, col, row_top, row_start): a ladder whose top has open air above
+    it and at least three rungs below to climb from."""
+    for lid, t in enumerate(levels, 1):
+        for r in range(2, len(t) - 4):
+            for c in range(len(t[0])):
+                if t[r][c] == "L" and t[r - 1][c] == "." and all(t[r + k][c] == "L" for k in (1, 2, 3)):
+                    return lid, c, r, r + 3
+    raise AssertionError("no level has a ladder top")
+
+
+def find_two_golds(levels):
+    """(level, (c1,r1), (c2,r2)): a gold with a diggable brick under it, plus
+    any other gold, in a level with at least two guards."""
+    for lid, t in enumerate(levels, 1):
+        golds = [(c, r) for r in range(len(t)) for c in range(len(t[0])) if t[r][c] == "g"]
+        guards = sum(row.count("r") for row in t)
+        for (c, r) in golds:
+            if r + 1 < len(t) and t[r + 1][c] == "#" and guards >= 2:
+                other = next((g for g in golds if g != (c, r)), None)
+                if other:
+                    return lid, (c, r), other
+    raise AssertionError("no level has two golds with a diggable one")
+
+
+def find_trapdoor(levels):
+    """(level, col, row): a trapdoor with open air above it."""
+    for lid, t in enumerate(levels, 1):
+        for r in range(1, len(t) - 1):
+            for c in range(len(t[0])):
+                if t[r][c] == "X" and t[r - 1][c] == ".":
+                    return lid, c, r
+    raise AssertionError("no level has a trapdoor")
 
 
 def main() -> int:
@@ -103,36 +155,39 @@ def main() -> int:
         assert gold == {"collected": 0, "total": expected_gold}, f"Expected {expected_gold} gold pieces, got {gold!r}"
         print(f"  ✓ gold count = {gold['collected']}/{gold['total']}")
 
-        # 4. Digging targets one row BELOW the player, not the player's
-        # own row. Level 2 spawns at (16, 20), with a brick at (15, 21)
-        # diagonally below-left — dig it with the real Z key (not the
-        # digAt debug hook, which bypasses this logic entirely and so
-        # wouldn't catch a same-row regression).
-        page.evaluate("window.__loderunner.setPlayerAt(16, 20)")
-        same_row_before = page.evaluate("window.__loderunner.getTile(15, 20)")
-        below_before = page.evaluate("window.__loderunner.getTile(15, 21)")
-        assert below_before == 1, f"Expected a brick at (15,21) to dig, got tile {below_before!r}"
+        levels = page.evaluate("window.LEVELS.map(l => l.tiles)")
+
+        # 4. Digging targets one row BELOW the player, not the player's own
+        # row — dig with the real Z key (not the digAt debug hook, which
+        # bypasses this logic and so wouldn't catch a same-row regression).
+        pit_level, pc, pr = find_pit_spot(levels)
+        page.evaluate(f"window.__loderunner.loadLevel({pit_level})")
+        for i in range(6):   # park every guard so nothing catches the player mid-test
+            page.evaluate(f"window.__loderunner.setEnemyAt({i}, 27, 15)")
+        page.evaluate(f"window.__loderunner.setPlayerAt({pc}, {pr})")
+        same_row_before = page.evaluate(f"window.__loderunner.getTile({pc - 1}, {pr})")
+        below_before = page.evaluate(f"window.__loderunner.getTile({pc - 1}, {pr + 1})")
+        assert below_before == 1, f"Expected a brick at ({pc - 1},{pr + 1}) to dig, got tile {below_before!r}"
         page.keyboard.down("KeyZ")
         page.wait_for_timeout(150)
         page.keyboard.up("KeyZ")
-        same_row_after = page.evaluate("window.__loderunner.getTile(15, 20)")
-        below_after = page.evaluate("window.__loderunner.getTile(15, 21)")
-        assert below_after == 0, f"Dig-left should clear the brick below-left (15,21), got {below_after!r}"
+        same_row_after = page.evaluate(f"window.__loderunner.getTile({pc - 1}, {pr})")
+        below_after = page.evaluate(f"window.__loderunner.getTile({pc - 1}, {pr + 1})")
+        assert below_after == 0, f"Dig-left should clear the brick below-left, got {below_after!r}"
         assert same_row_after == same_row_before, "Dig-left must not touch the player's own row"
         print("  ✓ Z digs the brick diagonally below-left, not same-row")
 
-        # 4b. Falling into your own hole isn't a trap: you drop straight
-        # down the middle of the hole (not half-overlapping the wall, which
-        # is what happened when the left-going column lagged the sprite),
-        # and pushing toward a side hops you out onto the floor beside it.
-        # Walking left from (16,20) over the dug (15,21): fall in, then the
-        # held Left key climbs out the far side.
+        # 4b. Falling into your own hole isn't a trap: you drop straight down
+        # the middle of it and pushing toward a side hops you out onto the
+        # floor beside it. Walk left over the dug hole: fall in, climb out.
         page.keyboard.down("ArrowLeft")
-        page.wait_for_timeout(700)
+        page.wait_for_timeout(480)
         page.keyboard.up("ArrowLeft")
         pit = page.evaluate("window.__loderunner.getPlayerPos()")
-        assert pit["row"] == 20 and pit["col"] <= 14, f"Should have hopped out of the pit and kept walking, got {pit!r}"
+        assert pit["row"] == pr and pit["col"] <= pc - 2, f"Should have hopped out of the pit, got {pit!r}"
         print("  ✓ falling into your own hole and climbing back out works")
+
+        page.evaluate("window.__loderunner.loadLevel(2)")
 
         # 5. Player can collect gold by walking onto it
         gold_positions = page.evaluate("""() => {
@@ -261,37 +316,69 @@ def main() -> int:
         assert custom_gold["total"] == 1, f"Expected the 1 placed gold, got {custom_gold!r}"
         print(f"  ✓ editor: saved level plays back as level {custom_id} with correct data")
 
-        # 11. Ladder: holding Up at the top must stop at the walkway, not
-        # keep rising (the player used to float above it until Up was
-        # released). Level 1: ladder col 11 rises to the walkway at row 1,
-        # whose tile centre is y=24.
-        page.evaluate("window.__loderunner.loadLevel(1)")
-        page.evaluate("window.__loderunner.setPlayerAt(11, 6)")
+        # 11. Ladder: holding Up at the top must stop on the walkway, not keep
+        # rising (the player used to float above it until Up was released).
+        lad_level, lc, lt, lstart = find_ladder_top(levels)
+        page.evaluate(f"window.__loderunner.loadLevel({lad_level})")
+        for i in range(6):
+            page.evaluate(f"window.__loderunner.setEnemyAt({i}, 27, 15)")
+        page.evaluate(f"window.__loderunner.setPlayerAt({lc}, {lstart})")
         page.keyboard.down("ArrowUp")
         page.wait_for_timeout(2300)
         top = page.evaluate("window.__loderunner.getPlayerPos()")
         page.keyboard.up("ArrowUp")
-        assert top["row"] == 1 and abs(top["y"] - 24) < 0.5, f"Should rest on the walkway (row 1, y=24) while Up is held, got {top!r}"
+        want_y = (lt - 1) * 16 + 8
+        assert top["row"] == lt - 1 and abs(top["y"] - want_y) < 0.5, f"Should rest on the walkway (row {lt - 1}, y={want_y}) while Up is held, got {top!r}"
         print("  ✓ holding Up at the top of a ladder stops on the walkway (no floating)")
 
-        # 12. Two guards dropping gold into the same pit must not destroy
-        # any: the second drop used to overwrite the first, leaving the
-        # level unwinnable.
+        # 12. Two guards dropping gold into the same pit must not destroy any:
+        # the second drop used to overwrite the first, leaving the level
+        # unwinnable.
         def gold_tiles():
             return page.evaluate("""() => { let n = 0;
-                for (let r = 0; r < 22; r++) for (let c = 0; c < 32; c++)
+                for (let r = 0; r < 16; r++) for (let c = 0; c < 28; c++)
                     if (window.__loderunner.getTile(c, r) === 5) n++;
                 return n; }""")
-        page.evaluate("window.__loderunner.loadLevel(1)")
+        g_level, (c1, r1), (c2, r2) = find_two_golds(levels)
+        page.evaluate(f"window.__loderunner.loadLevel({g_level})")
         page.evaluate("window.__loderunner.setPlayerAt(0, 0)")
         total = page.evaluate("window.__loderunner.getGold().total")
-        page.evaluate("window.__loderunner.setEnemyAt(0, 25, 5)"); page.wait_for_timeout(80)   # steals (25,5)
-        page.evaluate("window.__loderunner.digAt(25, 6)")
-        page.evaluate("window.__loderunner.setEnemyAt(0, 25, 6)"); page.wait_for_timeout(120)  # trapped, drops it
-        page.evaluate("window.__loderunner.setEnemyAt(1, 26, 9)"); page.wait_for_timeout(80)   # steals (26,9)
-        page.evaluate("window.__loderunner.setEnemyAt(1, 25, 6)"); page.wait_for_timeout(150)  # same pit, drops it too
+        page.evaluate(f"window.__loderunner.setEnemyAt(0, {c1}, {r1})"); page.wait_for_timeout(80)     # steals gold 1
+        page.evaluate(f"window.__loderunner.digAt({c1}, {r1 + 1})")
+        page.evaluate(f"window.__loderunner.setEnemyAt(0, {c1}, {r1 + 1})"); page.wait_for_timeout(120)  # trapped, drops it
+        page.evaluate(f"window.__loderunner.setEnemyAt(1, {c2}, {r2})"); page.wait_for_timeout(80)     # steals gold 2
+        page.evaluate(f"window.__loderunner.setEnemyAt(1, {c1}, {r1 + 1})"); page.wait_for_timeout(150)  # same pit, drops it too
         assert gold_tiles() == total, f"Both dropped pieces must survive: {gold_tiles()} on board, expected {total}"
         print("  ✓ two guards dropping gold into one pit loses nothing")
+
+        # 13. The way out: hidden ladders don't exist until every piece of gold
+        # is collected, then appear and can be climbed out of the top of the
+        # screen. Level 1's runs up column 18, joined to the rope on row 3.
+        page.evaluate("window.__loderunner.loadLevel(1)")
+        for i in range(6):
+            page.evaluate(f"window.__loderunner.setEnemyAt({i}, 27, 15)")
+        assert page.evaluate("window.__loderunner.getLaddersRevealed()") is False, "Hidden ladders must start hidden"
+        page.evaluate("""() => { for (let r = 0; r < 16; r++) for (let c = 0; c < 28; c++)
+            if (window.__loderunner.getTile(c, r) === 5) window.__loderunner.pickupGold(c, r); }""")
+        assert page.evaluate("window.__loderunner.getLaddersRevealed()") is True, "Collecting all gold must reveal the ladders"
+        page.evaluate("window.__loderunner.setPlayerAt(18, 3)")
+        page.keyboard.down("ArrowUp")
+        page.wait_for_timeout(2200)
+        page.keyboard.up("ArrowUp")
+        won = page.evaluate("window.__loderunner.getState()")
+        assert won == "won", f"Climbing the revealed ladder off the top should win level 1, got {won!r}"
+        print("  ✓ hidden ladder appears when all gold is collected, and climbing out wins")
+
+        # 14. Trapdoors look like brick but you fall through them.
+        t_level, tc, tr = find_trapdoor(levels)
+        page.evaluate(f"window.__loderunner.loadLevel({t_level})")
+        for i in range(6):
+            page.evaluate(f"window.__loderunner.setEnemyAt({i}, 27, 15)")
+        page.evaluate(f"window.__loderunner.setPlayerAt({tc}, {tr - 1})")
+        page.wait_for_timeout(600)
+        fell = page.evaluate("window.__loderunner.getPlayerPos()")
+        assert fell["row"] >= tr, f"Should fall through the trapdoor at ({tc},{tr}), got {fell!r}"
+        print("  ✓ a trapdoor drops you through")
 
         # Final check
         if console_errors:

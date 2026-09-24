@@ -34,11 +34,11 @@
     }
     .stage {
       position: relative;
-      /* The board is 32x22 tiles (512x352), not square — the stage used to
+      /* The board is 28x16 tiles (448x256), not square — the stage used to
          be a 1:1 box, which left a dead black band under the level and put
          the overlay text off-center. */
-      width: min(900px, 96vw, calc(96vh * 32 / 22));
-      aspect-ratio: 32 / 22;
+      width: min(900px, 96vw, calc(96vh * 28 / 16));
+      aspect-ratio: 28 / 16;
     }
     #game {
       display: block;
@@ -117,7 +117,7 @@
 </head>
 <body>
   <div class="stage">
-    <canvas id="game" width="512" height="352" aria-label="Lode Runner game canvas"></canvas>
+    <canvas id="game" width="448" height="256" aria-label="Lode Runner game canvas"></canvas>
     <div class="hud" id="hud">
       <span id="gold-count">GOLD: 0</span>
       <span id="status">PLAY</span>

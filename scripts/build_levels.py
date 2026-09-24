@@ -1,165 +1,83 @@
 #!/usr/bin/env python3
-"""Convert the vendored VGLC Lode Runner level corpus into levels.js.
+"""Generate levels.js: the 150 levels of the 1983 Apple II Lode Runner.
 
-Source data: levels/vglc-source/Level 1.txt .. Level 150.txt, vendored
-verbatim from TheVGLC (MIT license): https://github.com/TheVGLC/TheVGLC
-"Lode Runner/Processed" — a plain-text transcription of the 150 levels
-from the original 1983 Broderbund release (design: Douglas E. Smith).
+Source: lodeRunner.v.classic.js from SimonHung/LodeRunner_TotalRecall, whose
+header says the levels were extracted from the Apple II disk image. They are
+28x16, one player start each, and — unlike the levels this project used
+before — they keep the two tile types the earlier data dropped:
 
-VGLC tile legend (see levels/vglc-source, or Loderunner.json in the
-source repo):
-    B  solid, undiggable ground
-    b  solid, diggable ground
-    .  passable, empty
-    -  passable, climbable rope / hand-over-hand bar
-    #  passable, climbable ladder
-    G  passable, pickupable gold
-    E  enemy spawn (VGLC doesn't distinguish runner vs. grunter)
-    M  player spawn
+    S  hidden ladder: invisible until every piece of gold is collected, then
+       it appears and gives the way out (111 of the 150 levels have one)
+    X  trapdoor: looks like brick but you fall through it (85 levels)
 
-Re-run this script whenever levels/vglc-source changes:
-    python3 scripts/build_levels.py
+Rights note: the level designs are Doug Smith's / Brøderbund's, and that
+repository states no licence, so this project has no licence to them either.
+
+Tile mapping (source char -> our char):
+    ' ' -> .   empty            '#' -> #   brick (diggable)
+    '@' -> |   solid            'H' -> L   ladder
+    '-' -> ~   rope             '$' -> g   gold
+    '0' -> r   guard spawn      'X' -> X   trapdoor
+    'S' -> S   hidden ladder    '&' -> (player spawn, stored separately, tile empty)
+
+    python3 scripts/build_levels.py                 # download + build
+    python3 scripts/build_levels.py --src FILE      # use a local copy
 """
+import argparse
+import json
 import os
 import re
+import urllib.request
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-REPO_ROOT = os.path.dirname(SCRIPT_DIR)
-SOURCE_DIR = os.path.join(REPO_ROOT, "levels", "vglc-source")
-OUTPUT_PATH = os.path.join(REPO_ROOT, "levels.js")
-LEVEL_COUNT = 150
-
-# VGLC char -> our engine's LEVEL_ASCII char (see game.js parseLevel()).
-# 'M' (player spawn) and 'E' (enemy spawn) are handled specially below
-# rather than through this table, since they need extra bookkeeping.
-TILE_MAP = {
-    ".": ".",  # empty
-    "B": "|",  # solid / undiggable
-    "b": "#",  # brick / diggable
-    "#": "L",  # ladder
-    "-": "~",  # rope / hand-over-hand bar (NEW — engine doesn't act on
-               # this yet; parseLevel() will treat unknown chars as
-               # empty until rope movement is implemented)
-    "G": "g",  # gold
-}
-
-# All VGLC enemy spawns default to the runner type for now — the source
-# corpus doesn't distinguish runner vs. grunter, so this is a deliberate
-# placeholder pending a gameplay-balance pass, not a data-fidelity call.
-ENEMY_SPAWN_CHAR = "r"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+URL = "https://raw.githubusercontent.com/SimonHung/LodeRunner_TotalRecall/HEAD/lodeRunner.v.classic.js"
+COLS, ROWS, COUNT = 28, 16, 150
+MAP = {" ": ".", "#": "#", "@": "|", "H": "L", "-": "~", "$": "g", "0": "r", "X": "X", "S": "S"}
 
 
-def convert_level(level_id, raw_text):
-    rows = raw_text.splitlines()
-    tile_rows = []
-    player_spawn = None
-    gold_total = 0
-    enemy_count = 0
-
-    for row_idx, row in enumerate(rows):
-        out_row = []
-        for col_idx, ch in enumerate(row):
-            if ch == "M":
-                if player_spawn is not None:
-                    raise ValueError(
-                        f"Level {level_id}: multiple 'M' spawns "
-                        f"(row {row_idx}, col {col_idx})"
-                    )
-                player_spawn = {"col": col_idx, "row": row_idx}
-                out_row.append(".")
-            elif ch == "E":
-                enemy_count += 1
-                out_row.append(ENEMY_SPAWN_CHAR)
-            elif ch == "G":
-                gold_total += 1
-                out_row.append(TILE_MAP["G"])
-            elif ch in TILE_MAP:
-                out_row.append(TILE_MAP[ch])
+def convert(idx, rows):
+    tiles, spawn, gold, enemies = [], None, 0, 0
+    for r, line in enumerate(rows):
+        out = []
+        for c, ch in enumerate(line):
+            if ch == "&":
+                if spawn is not None:
+                    raise ValueError(f"level {idx}: two player starts")
+                spawn = {"col": c, "row": r}
+                out.append(".")
+            elif ch in MAP:
+                out.append(MAP[ch])
+                gold += ch == "$"
+                enemies += ch == "0"
             else:
-                raise ValueError(
-                    f"Level {level_id}: unrecognized tile {ch!r} "
-                    f"(row {row_idx}, col {col_idx})"
-                )
-        tile_rows.append("".join(out_row))
-
-    return {
-        "id": level_id,
-        "tiles": tile_rows,
-        "playerSpawn": player_spawn,
-        "goldTotal": gold_total,
-        "enemyCount": enemy_count,
-    }
-
-
-def js_string_literal(s):
-    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-
-def render_level(level):
-    spawn = level["playerSpawn"]
-    spawn_js = (
-        f'{{ col: {spawn["col"]}, row: {spawn["row"]} }}'
-        if spawn is not None
-        else "null /* no spawn in source data — see NOTES.md */"
-    )
-    tiles_js = ",\n      ".join(js_string_literal(r) for r in level["tiles"])
-    return (
-        "  {\n"
-        f'    id: {level["id"]},\n'
-        f"    playerSpawn: {spawn_js},\n"
-        f'    goldTotal: {level["goldTotal"]},\n'
-        f'    enemyCount: {level["enemyCount"]},\n'
-        "    tiles: [\n"
-        f"      {tiles_js}\n"
-        "    ],\n"
-        "  }"
-    )
-
-
-def main():
-    levels = []
-    for i in range(1, LEVEL_COUNT + 1):
-        path = os.path.join(SOURCE_DIR, f"Level {i}.txt")
-        with open(path, "r", encoding="utf-8") as f:
-            raw = f.read()
-        levels.append(convert_level(i, raw))
-
-    no_spawn = [lv["id"] for lv in levels if lv["playerSpawn"] is None]
-
-    header = f"""/* Auto-generated by scripts/build_levels.py — do not hand-edit.
- *
- * {LEVEL_COUNT} levels converted from the vendored VGLC corpus
- * (levels/vglc-source/, MIT license, https://github.com/TheVGLC/TheVGLC),
- * itself a transcription of the original 1983 Broderbund Lode Runner
- * levels (design: Douglas E. Smith).
- *
- * Tile chars match game.js's LEVEL_ASCII scheme, plus one addition:
- * '~' = rope / hand-over-hand bar (not yet acted on by the engine —
- * parseLevel() currently treats unrecognized chars as empty, so these
- * tiles are inert until rope movement is implemented).
- *
- * Levels with playerSpawn: null had no 'M' marker in the source data
- * (currently just level 150 — the source's finale "vault" screen).
- * Re-run: python3 scripts/build_levels.py
- */
-(() => {{
-  'use strict';
-
-  const LEVELS = [
-{",\n".join(render_level(lv) for lv in levels)}
-  ];
-
-  window.LEVELS = LEVELS;
-}})();
-"""
-
-    with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
-        f.write(header)
-
-    print(f"Wrote {len(levels)} levels to {OUTPUT_PATH}")
-    if no_spawn:
-        print(f"Levels with no player spawn in source data: {no_spawn}")
+                raise ValueError(f"level {idx}: unknown tile {ch!r} at ({c},{r})")
+        tiles.append("".join(out))
+    if spawn is None:
+        raise ValueError(f"level {idx}: no player start")
+    return {"id": idx, "playerSpawn": spawn, "goldTotal": gold, "enemyCount": enemies, "tiles": tiles}
 
 
 if __name__ == "__main__":
-    main()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--src", help="local lodeRunner.v.classic.js (default: download)")
+    args = ap.parse_args()
+    text = open(args.src).read() if args.src else urllib.request.urlopen(URL).read().decode()
+    rows = re.findall(r'"([^"\n]{%d})"' % COLS, text)
+    if len(rows) != COUNT * ROWS:
+        raise SystemExit(f"expected {COUNT * ROWS} rows, found {len(rows)}")
+    levels = [convert(i + 1, rows[i * ROWS:(i + 1) * ROWS]) for i in range(COUNT)]
+
+    js = (
+        "/* Auto-generated by scripts/build_levels.py — do not hand-edit.\n"
+        " * The 150 levels of the 1983 Apple II Lode Runner, extracted from the\n"
+        " * disk image by Simon Hung (SimonHung/LodeRunner_TotalRecall). 28x16.\n"
+        " * '.' empty  '#' brick  '|' solid  'L' ladder  '~' rope  'g' gold\n"
+        " * 'r' guard  'X' trapdoor  'S' hidden ladder (appears once all gold\n"
+        " * is collected). The player start is stored as playerSpawn. */\n"
+        "window.LEVELS = " + json.dumps(levels, separators=(",", ":")) + ";\n"
+    )
+    with open(os.path.join(ROOT, "levels.js"), "w") as f:
+        f.write(js)
+    hid = sum(any("S" in t for t in lv["tiles"]) for lv in levels)
+    trap = sum(any("X" in t for t in lv["tiles"]) for lv in levels)
+    print(f"Wrote levels.js: {len(levels)} levels, {hid} with hidden ladders, {trap} with trapdoors")

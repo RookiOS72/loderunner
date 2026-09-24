@@ -113,8 +113,13 @@ const Audio = (() => {
     arpeggio([392, 523, 659, 784], 90, 140, "square", 0.22);
   }
 
+  // The hidden ladders appear: a short rising figure, so you know to go.
+  function reveal() {
+    arpeggio([523, 659, 784, 1047], 70, 120, "triangle", 0.22);
+  }
+
   return {
     init, unlock, setMuted,
-    dig, gold, trap, enemyDeath, playerDeath, win,
+    dig, gold, trap, enemyDeath, playerDeath, win, reveal,
   };
 })();
