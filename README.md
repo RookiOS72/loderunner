@@ -23,29 +23,23 @@ open index.html
 
 ## What's in v0.3
 
-- **The real campaign is live**, and you can now actually pick a level: the menu screen doubles as a level-select for all 150 original levels (Left/Right to pick, Space to start) — vendored as data in `levels.js` / `levels/vglc-source/`. Winning advances to the next level on Space; losing retries the same one. The v0.2 hand-crafted level still exists in the code but isn't the default anymore.
-- **Fixed digging.** Z/X used to dig the brick beside the player's own row — a bug that only ever worked on the placeholder's specially-built layout. Real levels put the floor *below* the walking row, so digging now correctly targets diagonally below-left/right, matching the original.
+- **The real campaign is live**, and you can now actually pick a level: the menu screen doubles as a level-select for all 150 original levels (Left/Right to pick, Space to start) — vendored as data in `levels.js` / `levels/vglc-source/`. Winning advances to the next level on Space; losing retries the same one; clearing level 150 returns you to the picker.
+- **Fixed digging.** Z/X used to dig the brick beside the player's own row — a bug that only ever worked on the old placeholder level's specially-built layout (see v0.2 below; that level is gone as of v0.3.6). The real levels put the floor *below* the walking row, so digging now correctly targets diagonally below-left/right, matching the original.
 - **Rope tiles** (`~`): hand-over-hand bars. Standing on one suspends gravity — walk left/right freely — until you press Down to let go and drop through. Enemies hang on ropes too instead of falling through them.
-- **Real win condition.** Reaching the exit tile (placeholder level) or the top row (the 150 vendored levels, which have no exit tile in the source data) with all gold collected now actually wins — previously nothing did.
+- **Real win condition:** collect all gold, then reach the top row. (The source data doesn't preserve the original's "hidden ladder that appears once gold is collected," so reaching the top stands in for it.) Previously nothing checked this at all.
 - **The trap-and-recapture mechanic.** Dug holes close back up after ~4s; an enemy caught standing in one when it closes dies and respawns, but is safe to walk over while trapped, and gets ~2.5s to climb back out on its own first.
 - **Gold-carrying guards.** Guards steal gold they walk over (the level can't be won until it's recovered); trapping one in a hole makes it drop what it's carrying, which reappears one tile above the pit.
+- **v0.3.6: removed the v0.2 placeholder level.** It was a hand-built single level used to get the engine off the ground before the real 150 were vendored — it's no longer reachable from anywhere in the UI (the menu is a level-select over the real 150), so it was dead weight. See "What was in v0.2" below for what it used to be.
 - Debug hooks: `window.__loderunner.loadLevel(id)` jumps to any of the 150 levels by 1-based id; `setEnemyAt(index, col, row)` and `setPlayerPixelAt(x, y)` exist for deterministic tests.
 
-## What's in v0.2
+## What was in v0.2 (removed in v0.3.6)
 
-- Tile-based 16×16 retro graphics with classic Atari color palette (orange bricks with real brick-pattern mortar, yellow gold piles, green exit, yellow ladder rungs)
-- **Real brick-pattern rendering:** staggered bricks with mortar lines (not solid rectangles)
-- **Player movement:** arrow keys to run (55 px/s), climb ladders, fall through dug bricks
-- **Two ladder columns** at cols 2 and 30, running rows 7–21, so the player can climb between any brick row
-- **Brick digging** (Z/X keys) with 350ms cooldown between digs
-- **Player sprite:** small humanoid figure (head, body, legs, facing-direction eyes)
-- **Two enemy types:**
-  - **Red Runner:** tall angular figure, patrols horizontally, chases player on same row
-  - **Purple Grunter:** round figure, patrols when grounded, falls down holes
-- **Both enemies** use proper px/sec movement (no per-frame tile jumps) and bounce off walls/bricks
-- **Six gold pieces** scattered through the level
-- **Win condition:** collect all gold, reach top exit (col 16 row 15) — note: this tile existed but did nothing until v0.3, see below
-- **Lose condition:** touch any enemy (collision uses TILE * 0.7 distance)
+The very first playable milestone was a single hand-built level, before the real 150 were vendored. It's gone from the code now, kept here for history:
+
+- Tile-based 16×16 retro graphics, orange brick-pattern rendering, yellow ladder rungs, a green exit tile.
+- Two full-height ladder columns (cols 2 and 30) so the player could reach any brick row.
+- Six gold pieces, one Red Runner (chases on-row) and one Purple Grunter (patrols/falls).
+- Win condition: collect all gold, then step onto a fixed exit tile at (col 16, row 15) — this tile existed from v0.2 but didn't actually trigger a win until v0.3.2.
 
 ## What's NOT in v0.1
 
@@ -70,8 +64,8 @@ Deferred to v0.2+:
 
 - `index.html` — page shell + HUD + canvas
 - `game.js` — engine + player + enemy AI + level + test hooks
-- `levels.js` — all 150 original levels, generated (see below); this is
-  what the game actually plays by default now
+- `levels.js` — all 150 original levels, generated (see below); the only
+  level data the game plays now
 - `levels/vglc-source/` — the 150 original levels, vendored verbatim as
   plain-text tile grids from [TheVGLC](https://github.com/TheVGLC/TheVGLC)
   (MIT), itself a transcription of the 1983 Broderbund release designed by
@@ -82,7 +76,7 @@ Deferred to v0.2+:
 
 ## Test coverage
 
-The smoke test verifies: page loads with no console errors, state transitions (menu → playing → won/lost), gold count matches the level, player can dig bricks, can collect gold, enemy contact triggers lost state, and 3 consecutive restart cycles all reach 'playing' state.
+The smoke test verifies: page loads with no console errors, the menu's level-select (Left/Right pick, wraparound, Space starts the pick), gold count matches the picked level's own data, Z digs diagonally below-left (not the player's own row), gold pickup, enemy contact triggers 'lost', forceWin() reaches 'won', winning advances to the next level on Space, and losing retries the same level. It doesn't cover the hole-refill/trap-and-escape timing or gold-carrying guards (see game.js and recent commit messages for how those were checked separately).
 
 To run it:
 

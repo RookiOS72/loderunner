@@ -1,21 +1,8 @@
 /* Lode Runner — in-browser port by Rook.
 
-v0.2 changes from v0.1:
-- Player movement speed reduced (80 → 55 px/s) for more deliberate control.
-- Brick rendering: actual brick pattern (zigzag mortar lines) instead of
-  solid orange rectangles.
-- Player sprite: small humanoid stick figure (head, body, legs).
-- Enemy sprites: distinctive shapes — Runner is angular/tall, Grunter
-  is rounder/shorter.
-- Enemy AI rewrite: actually moves. Runners patrol horizontally, chase
-  the player on same row. Grunters patrol when grounded, fall when no
-  brick is below.
-- Level ladders: more ladders placed so the player can climb between
-  any two brick rows. Specifically two vertical ladder columns connecting
-  rows 7-21.
-- Larger collision radius (TILE * 0.8) so contact is reliable.
-
-The classic Atari first level is encoded directly below in LEVEL_ASCII.
+See README.md for version history. Levels are the 150 originals,
+vendored in levels.js — there's no hand-crafted level in this file
+anymore (removed in v0.3.6; see the README for what it used to be).
 */
 
 (() => {
@@ -34,7 +21,6 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
   const T_LADDER      = 3;
   const T_FREE_LADDER = 4;
   const T_GOLD        = 5;
-  const T_EXIT        = 6;
   const T_RUNNER_SPAWN  = 7;
   const T_GRUNTER_SPAWN = 8;
   const T_ROPE          = 9;
@@ -59,50 +45,20 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
 
   // ---------------- Level ----------------
   // '.' empty  '#' brick  '|' solid  'L' ladder
-  // 'F' free ladder  'g' gold  'E' exit  'r' runner  'R' grunter
+  // 'F' free ladder  'g' gold  'r' runner  'R' grunter
   // '~' rope (hand-over-hand bar — hold position, no gravity, unless
   //     the player presses Down to let go; see isRopeAt() usage below)
-  // 
-  // Layout notes:
-  // - Two full vertical ladder columns at cols 1-2 and cols 17-18, running
-  //   rows 7-21. So the player can climb between any two brick rows.
-  // - Two solid brick rows at rows 12 and 20, plus a partial row at row 16
-  //   with a single brick to dig down through.
-  // - Gold in each section to require movement through ladders.
-  // - Exit at the top center.
-  // - One runner and one grunter to chase / patrol.
-  const LEVEL_ASCII = [
-    "                                ",   // row 0 — top
-    "                                ",   // row 1
-    "                                ",   // row 2
-    "                                ",   // row 3
-    "                                ",   // row 4
-    "                                ",   // row 5
-    "                                ",   // row 6
-    "  L                            L ",   // row 7  exit ladders top
-    "  L                            L ",   // row 8
-    "  L                            L ",   // row 9
-    "  L                            L ",   // row 10 (no gold - was floating)
-    "  Lg     g      g    g     gL ",   // row 11 gold on top of row 12 bricks
-    "  ##  ######  ######  ######  ## ",   // row 12 main brick row
-    "  L                            L ",   // row 13
-    "  L                            L ",   // row 14
-    "  L          g  E          g L ",   // row 15 gold above dig target + exit
-    "  L           #               L ",   // row 16 single dig target
-    "  L                            L ",   // row 17
-    "  L                            L ",   // row 18 (no gold - was floating)
-    "  L     g  g          g    g L ",   // row 19 gold above row 20 bricks
-    "R ##  ######  ######  ######  ## ",   // row 20 main brick row (bottom)
-    "  L                            L ",   // row 21 player spawn (ladders go down to here)
-  ];
-  let PLAYER_SPAWN = { col: 2, row: 21 }; // on the left ladder; reassigned by loadLevel()
+  //
+  // Level data lives entirely in levels.js (the 150 vendored levels);
+  // see loadLevelById() below. PLAYER_SPAWN is reassigned per-level from
+  // that data — this default only matters before any level has loaded.
+  let PLAYER_SPAWN = { col: 0, row: 0 };
 
   // ---------------- State ----------------
   let level = [];
   let enemySpawns = [];
-  let levelHasExit = false;
-  // null while playing the placeholder LEVEL_ASCII level; a 1-based id
-  // into window.LEVELS while playing one of the 150 vendored levels.
+  // 1-based id into window.LEVELS for whichever of the 150 levels is
+  // currently loaded. Set the moment any level loads (see boot, below).
   let currentLevelId = null;
   // Which level Space will start from the menu screen — changed with
   // Left/Right while at the menu (see the level-select overlay below).
@@ -148,7 +104,6 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
           case 'F': t = T_FREE_LADDER; break;
           case '~': t = T_ROPE; break;
           case 'g': t = T_GOLD; goldCount++; break;
-          case 'E': t = T_EXIT; break;
           case 'r': t = T_RUNNER_SPAWN; enemySpawns.push({ col, row, type: T_RUNNER_SPAWN }); break;
           case 'R': t = T_GRUNTER_SPAWN; enemySpawns.push({ col, row, type: T_GRUNTER_SPAWN }); break;
           default:  t = T_EMPTY;
@@ -182,10 +137,6 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
   function isPassableAt(col, row) {
     const t = tileAt(col, row);
     return !(t === T_BRICK || t === T_SOLID);
-  }
-  function computeHasExit() {
-    for (const row of level) for (const t of row) if (t === T_EXIT) return true;
-    return false;
   }
   function holeAt(col, row) {
     return digHoles.find(h => h.col === col && h.row === row);
@@ -354,17 +305,12 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
       player.goldCollected++;
     }
 
-    // Win check: only once all gold is collected. Levels with an exit
-    // tile need the player standing on it; the 150 vendored levels have
-    // no such tile (the original's "hidden ladder" nuance doesn't
-    // survive the source data), so for those reaching the top row
-    // stands in for "climb to the top of the screen," per the manual.
-    if (player.goldCollected >= player.goldTotal) {
-      if (levelHasExit) {
-        if (tileAt(player.col, player.row) === T_EXIT) triggerWin();
-      } else if (player.row === 0) {
-        triggerWin();
-      }
+    // Win check: all gold collected, then reach the top row — the
+    // source data doesn't preserve the original's "hidden ladder that
+    // appears after all gold," so this stands in for "climb to the top
+    // of the screen," per the manual.
+    if (player.goldCollected >= player.goldTotal && player.row === 0) {
+      triggerWin();
     }
     // Snap to tile center only at ladder touches or when movement stopped.
     // Otherwise player.x already tracks player.xFrac continuously.
@@ -555,7 +501,6 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
     [T_FREE_LADDER]: '#fdba35',
     [T_ROPE]: '#e0c090',
     [T_GOLD]: '#ffcc33',
-    [T_EXIT]: '#aaff66',
   };
 
   function renderTile(col, row, t, x, y) {
@@ -622,15 +567,6 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
       ctx2d.beginPath();
       ctx2d.arc(x + TILE/2 - 1, y + TILE/2, 2, 0, Math.PI*2);
       ctx2d.fill();
-    } else if (t === T_EXIT) {
-      // Exit: green door-like square with a small mark
-      ctx2d.fillStyle = COLORS[T_EXIT];
-      ctx2d.fillRect(x, y, TILE, TILE);
-      ctx2d.strokeStyle = '#000';
-      ctx2d.lineWidth = 1;
-      ctx2d.strokeRect(x + 1, y + 1, TILE - 2, TILE - 2);
-      ctx2d.fillStyle = '#000';
-      ctx2d.fillRect(x + TILE/2 - 1, y + TILE/2 - 3, 2, 6);  // door handle
     } else if (t === T_SOLID) {
       // Solid (background, indestructible): dark grey
       ctx2d.fillStyle = COLORS[T_SOLID];
@@ -768,29 +704,9 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
   }
 
   // ---------------- State transitions ----------------
-  function startGame() {
-    currentLevelId = null;
-    level = parseLevel(LEVEL_ASCII);
-    levelHasExit = computeHasExit();
-    digHoles = [];
-    resetPlayer();
-    player.goldCollected = 0;
-    player.goldTotal = countGold(level);
-    spawnEnemiesForLevel();
-    gameState = 'playing';
-    hideOverlay();
-    updateHud();
-  }
-
-  function countGold(lvl) {
-    let n = 0;
-    for (const row of lvl) for (const t of row) if (t === T_GOLD) n++;
-    return n;
-  }
-
   // Loads one of the 150 vendored levels (levels.js) by 1-based id.
   // Returns false (and leaves state untouched) if levels.js isn't
-  // loaded or id is out of range — callers fall back to startGame().
+  // loaded or id is out of range.
   function loadLevelById(id) {
     if (typeof window.LEVELS === 'undefined') return false;
     const lv = window.LEVELS[id - 1];
@@ -798,7 +714,6 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
     currentLevelId = id;
     if (lv.playerSpawn) PLAYER_SPAWN = { col: lv.playerSpawn.col, row: lv.playerSpawn.row };
     level = parseLevel(lv.tiles);
-    levelHasExit = computeHasExit();
     digHoles = [];
     resetPlayer();
     spawnEnemiesForLevel();
@@ -831,22 +746,24 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
     keys[e.code] = true;
     Audio.unlock();
     if (e.code === 'Space') {
-      if (gameState !== 'playing') {
-        if (gameState === 'menu' && typeof window.LEVELS !== 'undefined') {
-          // Play whichever of the 150 levels is currently picked in the
-          // menu's level-select, rather than always level 1.
-          loadLevelById(selectedLevel);
-        } else if (currentLevelId !== null) {
-          const nextId = (gameState === 'won') ? currentLevelId + 1 : currentLevelId;
-          if (!loadLevelById(nextId)) startGame(); // out of levels — back to the placeholder
-        } else {
-          startGame();
+      if (gameState === 'menu') {
+        // Play whichever of the 150 levels is currently picked in the
+        // menu's level-select.
+        loadLevelById(selectedLevel);
+      } else if (gameState === 'won') {
+        if (!loadLevelById(currentLevelId + 1)) {
+          // Cleared level 150 — back to the picker rather than falling
+          // off the end of the campaign.
+          gameState = 'menu';
+          renderMenuOverlay();
         }
+      } else if (gameState === 'lost') {
+        loadLevelById(currentLevelId);
       }
       e.preventDefault();
     }
-    // Level-select: only at the menu, and only when there's something
-    // to pick from. Left/Right otherwise mean "run" during play.
+    // Level-select: only at the menu, and only when levels.js actually
+    // loaded. Left/Right otherwise mean "run" during play.
     if (gameState === 'menu' && typeof window.LEVELS !== 'undefined'
         && (e.code === 'ArrowLeft' || e.code === 'ArrowRight')) {
       const total = window.LEVELS.length;
@@ -941,21 +858,20 @@ The classic Atari first level is encoded directly below in LEVEL_ASCII.
     },
     forceWin: () => { player.goldCollected = player.goldTotal; triggerWin(); },
     forceGameOver: () => { if (gameState === 'playing') killPlayer(); },
-    // Load one of the 150 vendored levels (levels.js) by 1-based id,
-    // bypassing the not-yet-built level-select UI. Levels without a
+    // Load one of the 150 vendored levels (levels.js) by 1-based id —
+    // the same thing the in-game level-select does. Levels without a
     // source player-spawn marker (currently just #150) keep whatever
-    // spawn was already set rather than guessing one. Winning a level
-    // loaded this way advances SPACE to the next id automatically
-    // (see the keydown handler) instead of restarting the placeholder.
+    // spawn was already set rather than guessing one.
     loadLevel: (id) => loadLevelById(id),
     getCurrentLevelId: () => currentLevelId,
   };
 
   // ---------------- Boot ----------------
-  level = parseLevel(LEVEL_ASCII);
-  levelHasExit = computeHasExit();
+  // Blank grid behind the menu until a level is picked — parseLevel()
+  // already treats missing rows/columns as empty, so an empty array is
+  // a valid "nothing yet" level.
+  level = parseLevel([]);
   digHoles = [];
-  player.goldTotal = countGold(level);
   updateHud();
   renderMenuOverlay();
   requestAnimationFrame(loop);
