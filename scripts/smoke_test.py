@@ -169,7 +169,10 @@ def main() -> int:
         below_before = page.evaluate(f"window.__loderunner.getTile({pc - 1}, {pr + 1})")
         assert below_before == 1, f"Expected a brick at ({pc - 1},{pr + 1}) to dig, got tile {below_before!r}"
         page.keyboard.down("KeyZ")
-        page.wait_for_timeout(150)
+        page.wait_for_timeout(300)
+        mid_dig = page.evaluate(f"window.__loderunner.getTile({pc - 1}, {pr + 1})")
+        assert mid_dig == 1, "The hole must not open until the dig finishes (the runner is frozen ~0.6s while digging)"
+        page.wait_for_timeout(500)
         page.keyboard.up("KeyZ")
         same_row_after = page.evaluate(f"window.__loderunner.getTile({pc - 1}, {pr})")
         below_after = page.evaluate(f"window.__loderunner.getTile({pc - 1}, {pr + 1})")
@@ -181,7 +184,7 @@ def main() -> int:
         # the middle of it and pushing toward a side hops you out onto the
         # floor beside it. Walk left over the dug hole: fall in, climb out.
         page.keyboard.down("ArrowLeft")
-        page.wait_for_timeout(480)
+        page.wait_for_timeout(1100)
         page.keyboard.up("ArrowLeft")
         pit = page.evaluate("window.__loderunner.getPlayerPos()")
         assert pit["row"] == pr and pit["col"] <= pc - 2, f"Should have hopped out of the pit, got {pit!r}"

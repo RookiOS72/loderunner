@@ -51,7 +51,7 @@ Not yet built: shareable-level URLs (the saved level's data would need to round-
 - **Fixed digging.** Z/X used to dig the brick beside the player's own row — a bug that only ever worked on the old placeholder level's specially-built layout (see v0.2 below; that level is gone as of v0.3.6). The real levels put the floor *below* the walking row, so digging now correctly targets diagonally below-left/right, matching the original.
 - **Rope tiles** (`~`): hand-over-hand bars. Standing on one suspends gravity — walk left/right freely — until you press Down to let go and drop through. Enemies hang on ropes too instead of falling through them.
 - **Real win condition:** collect all gold, then climb out the top of the screen. (Superseded by v0.3.14, which restores the original's hidden ladder that appears once the gold is collected — before that the levels didn't carry it and level 1 could not be finished.)
-- **The trap-and-recapture mechanic.** Dug holes close back up after ~4s; an enemy caught standing in one when it closes dies and respawns, but is safe to walk over while trapped, and gets ~2.5s to climb back out on its own first.
+- **The trap-and-recapture mechanic.** Dug holes close back up after ~4s (now ~9.9s, see v0.4); an enemy caught standing in one when it closes dies and respawns, but is safe to walk over while trapped, and gets ~2.5s to climb back out on its own first.
 - **Gold-carrying guards.** Guards steal gold they walk over (the level can't be won until it's recovered); trapping one in a hole makes it drop what it's carrying, which reappears one tile above the pit.
 - **v0.3.6: removed the v0.2 placeholder level.** It was a hand-built single level used to get the engine off the ground before the real 150 were vendored — it's no longer reachable from anywhere in the UI (the menu is a level-select over the real 150), so it was dead weight. See "What was in v0.2" below for what it used to be.
 - **v0.3.7: sound**, synthesized via WebAudio (no audio files, same approach as the sibling [asteroids](https://github.com/RookiOS72/asteroids) project) — a thunk for digging, a chime for gold, a "gotcha" blip for trapping a guard, a poof when one dies in a refilling hole, and stingers for winning/losing a level. `M` mutes.
@@ -63,6 +63,31 @@ Not yet built: shareable-level URLs (the saved level's data would need to round-
 - **v0.3.13: the actual 1983 sprites.** v0.3.12's characters were our own drawings in the original's style; the point of this port is fidelity, so the runner and guards now use the real Apple II frames — every one of the 38 (run, hand-over-hand, climb, dig, fall, with the originals' separate left-facing frames rather than mirrors) in the Apple II hi-res white/orange/blue. `scripts/build_sprites.py` decodes them from the public [XekriRedmane/lode_runner_reveng](https://github.com/XekriRedmane/lode_runner_reveng) project, using its disassembly's animation tables to know which sprite is which. **Rights note:** that art is Brøderbund's, and that repository states no licence, so this project has no licence to it either — it's a fan port, and the levels come from the same original. If a rights holder objects, `python3 scripts/build_sprites.py --source own` regenerates `sprites.js` with our own look-alike drawings (the v0.3.12 set) in one command.
 - **v0.3.14: the actual Apple II levels — and a way out.** Level 1 couldn't be finished: with all the gold collected there was no ladder to climb out. In the original, some ladders are **hidden** until every piece of gold is collected, then appear (111 of the 150 levels have one). The levels vendored earlier (from the VGLC corpus) had dropped them — and, it turned out, weren't the Apple II levels at all but a 32×22 variant with different layouts. Now `levels.js` is built by `scripts/build_levels.py` from levels extracted from the Apple II disk image (via [SimonHung/LodeRunner_TotalRecall](https://github.com/SimonHung/LodeRunner_TotalRecall)): the real 150, on the original **28×16** board, with hidden ladders, and **trapdoors** (85 levels) — tiles that look like brick but drop you through. The status line tells you when the ladder has appeared, and a rising chime plays. The editor gained `0` (trapdoor) and `H` (hidden ladder). **Rights note:** as with the sprites, the designs are Doug Smith's/Brøderbund's and that repository states no licence, so neither does this project. Custom levels saved from the 32×22 editor before this are cropped to the new board.
 - Debug hooks: `window.__loderunner.loadLevel(id)` jumps to any level (official or custom) by 1-based id; `setEnemyAt(index, col, row)` and `setPlayerPixelAt(x, y)` exist for deterministic tests; `getHighestCleared()` / `resetProgress()` for saved progress; `enterEditor()`, `editorKey(code)`, `getEditorState()`, `saveEditorLevelAs(name)`, `getCustomLevels()`, `clearCustomLevels()` for the editor.
+
+## What's in v0.4 (play-testing the 150 levels)
+
+Before restarting the campaign faithfully ("New Game" from level 1 with lives), every level had to be play-tested. That turned out to need two new tools, and they found a lot of places where the engine disagreed with the 1983 game.
+
+**The tools** (see "Play testing" below): a bot that plays levels in the real engine, and a differential test that drives the same keys through this engine and through the reference port ([SimonHung/LodeRunner_TotalRecall](https://github.com/SimonHung/LodeRunner_TotalRecall), not vendored) and compares where the runner goes.
+
+**Engine fixes the play test forced** (each one made real levels unwinnable or wrong):
+
+- **Holes now stay open ~9.9s, not 4s.** In the original a dug hole stays open 166 ticks and takes 20 more to fill, while the runner needs 5 ticks to cross a tile, so a hole lasts about 37 tiles of running. At our runner speed that is ~9.9s. With 4s, levels like 16 (drop into a sealed room, take six gold, climb back out) could not be won. Guards get ~3.8s (was 2.5s) to climb out of a pit.
+- **Digging follows the original's rule and takes time.** The brick diagonally below must be plain brick and the tile *beside* you must be empty (not gold, ladder, rope or trapdoor; a hidden ladder that hasn't appeared counts as empty). The runner is frozen for ~0.6s while digging and the hole opens when that finishes. Before, any brick could be dug instantly with a 0.35s cooldown.
+- **Falling and climbing run at the original's speed** (~61px/s, same as the original's climb; falling was 200px/s).
+- **Trapdoors are walls from the side.** You fall through one from above, but you cannot walk into it sideways or climb up into it (you could).
+- **Going up needs a ladder in your own tile.** You cannot grab a ladder from the empty tile below it.
+- **Gold is picked up near the middle of its tile**, as in the original, not on first touch. (Walking sideways into a gold tile that has no floor drops you through it off-centre with no pickup; you have to fall or climb straight through it.)
+- **Landing and turning follow the original**: a fall carries on until you are centred on the tile; running waits until you are on the row's centre line; climbing or falling recentres you in the column.
+- **Guards no longer hold stolen gold forever.** They drop it after 12-37 steps, as in the original (a guard that kept it forever could soft-lock a level).
+- **Two real bugs:** a level could start with the runner's sub-tile position left over from the last level (hold a direction when a level starts and you were teleported), and after falling into a pit the runner could be stuck "falling" while standing on a ladder, so the pit-escape hop never fired.
+- Still deliberately different from the original: the runner can hop out of a pit (see v0.3.10).
+
+**Results.** `scripts/conform.py` matches the reference on ~99% of random key runs across all 150 levels (same tiles visited), so runner movement is now close to the original. `scripts/playtest.py` (no guards) wins 68 of 150 levels; 13 more (25, 30, 48, 49, 59, 64, 92, 98, 115, 136, 137, 139, 148) are flagged: some gold is unreachable by any route the bot's model allows, most likely because a guard has to carry it out (see below); the other 69 are beyond the bot's planner, not known-broken. Per-level list: `PLAYTEST.md`.
+
+**Guards are the next problem, and they matter for winnability.** The engine's guards patrol horizontally and only fall; they never climb or chase. In the original their chase AI, and their habit of carrying gold to somewhere reachable, is part of solving some levels (level 137 is the clear case: its top corridor is only reachable through a hidden-ladder gap a guard can fall through, so a guard has to carry that gold out; the other flagged levels look similar but are not confirmed one by one). Until guards behave like the originals those levels cannot be completed here. The original's other guard traits (speed tied to the number of guards, dying and respawning at the top, being stepped on) are also missing.
+
+**There is no lives limit** (losing just retries the level), which is what play-testing wants; the faithful five-lives mode will be added later as something you can turn off.
 
 ## What was in v0.2 (removed in v0.3.6)
 
@@ -100,6 +125,8 @@ Deferred to v0.2+:
 - `levels.js` — the 150 Apple II levels (28×16), generated by
   `scripts/build_levels.py`; the only level data the game plays
 - `scripts/smoke_test.py` — Playwright end-to-end test
+- `scripts/playtest.py` + `scripts/playbot.js` — the level play-test bot (see below)
+- `scripts/conform.py` — differential test against the reference port (see below)
 
 ## Test coverage
 
@@ -112,6 +139,24 @@ uv venv .venv && uv pip install --python .venv/bin/python playwright
 .venv/bin/playwright install chromium
 .venv/bin/python scripts/smoke_test.py
 ```
+
+## Play testing
+
+```bash
+.venv/bin/python scripts/playtest.py --static     # 2s: is every gold reachable at all? (holes permanent, no timing)
+.venv/bin/python scripts/playtest.py 1 16 37      # a bot plays those levels in the real engine (no guards)
+.venv/bin/python scripts/playtest.py --trace 16   # ...and prints the route it planned and any step that failed
+.venv/bin/python scripts/playtest.py              # all 150 (slow; run shards in parallel, see the script header)
+```
+
+The bot (`scripts/playbot.js`, runs inside the page against the real `game.js` on a virtual clock) plans a route with the engine's own rules — walking, ladders, ropes, falling, trapdoors, digging with the original's rule, holes that expire — picks an order for the gold with backtracking out of dead ends, and then presses real keys. If the engine disagrees with the plan it re-plans from where the runner actually is. `--static` is a cheaper necessary condition: it pretends every hole you can dig stays open forever, and reports any gold that is *still* unreachable, which cannot be planner weakness.
+
+```bash
+git clone --depth 1 https://github.com/SimonHung/LodeRunner_TotalRecall ~/rookios72/reference/LodeRunner_TotalRecall
+.venv/bin/python scripts/conform.py --ref ~/rookios72/reference/LodeRunner_TotalRecall --levels 1 2 3 --runs 10
+```
+
+`conform.py` feeds identical random key sequences (no guards) to this game and to the reference port headless, and reports any tile one visited that the other never got near. The reference is the closest thing to the 1983 game's behaviour we can run, so this is how movement bugs were found. It is not vendored (it has no licence); clone it wherever you like.
 
 ## License
 

@@ -27,9 +27,14 @@ anymore (removed in v0.3.6; see the README for what it used to be).
   const T_TRAP          = 10; // looks like brick, but you fall through it
 
   const PLAYER_SPEED       = 60; // px/s — 2x enemies (RUNNER=35, GRUNTER=25)
-  const PLAYER_CLIMB_SPEED = 50;
-  const PLAYER_FALL_SPEED  = 200;
-  const DIG_RECHARGE_MS    = 350;
+  // Vertical speeds are the original's: climbing and falling both move a tile
+  // in ~4.9 ticks (yMove 9 of a 44px tile) against 5 ticks for a horizontal
+  // tile, i.e. ~61px/s when running is 60px/s. (Falling used to be 200px/s.)
+  const PLAYER_CLIMB_SPEED = 61;
+  const PLAYER_FALL_SPEED  = 61;
+  // Digging freezes the runner for 11 ticks (0.59s at our scale); the hole
+  // opens when that finishes.
+  const DIG_TIME_MS        = 587;
 
   const RUNNER_SPEED     = 35;
   const GRUNTER_SPEED    = 25;
@@ -37,12 +42,22 @@ anymore (removed in v0.3.6; see the README for what it used to be).
   const ENEMY_RESPAWN_MS = 5000;
 
   // A dug hole closes back up into a brick after this long. Anyone still
-  // standing in it when it closes dies. Guards get a shorter window to
-  // climb out on their own first, matching "guards can climb out of pits
-  // that do not close up around them"; the player can hop out at will by
-  // pushing toward a side (see the pit-escape block in updatePlayer).
-  const HOLE_REFILL_MS   = 4000;
-  const ENEMY_ESCAPE_MS  = 2500;
+  // standing in it when it closes dies. Timings are the original's,
+  // measured against the runner: in the reference port of the Apple II game
+  // (SimonHung/LodeRunner_TotalRecall) a hole stays open 166 ticks and takes
+  // 20 more to fill, while the runner needs 5 ticks per tile. That is about
+  // 37 tiles of running; at our runner speed (3.75 tiles/s) it is ~9.9s.
+  // (This was 4s until the play test showed levels like 16, which need you
+  // to drop into a room, grab six gold and climb back out, were unwinnable.)
+  // Guards climb out on their own after 51 ticks + shaking + climbing out
+  // (~3.8s at our scale), matching "guards can climb out of pits that do not
+  // close up around them"; the player can hop out at will by pushing toward
+  // a side (see the pit-escape block in updatePlayer).
+  const HOLE_REFILL_MS   = 9900;
+  const ENEMY_ESCAPE_MS  = 3800;
+
+  // Deliberate softening of the original (see updatePlayer): the runner may hop out of a pit.
+  let pitEscape = true;
 
   // ---------------- Level ----------------
   // '.' empty  '#' brick  '|' solid  'L' ladder
@@ -282,12 +297,14 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     player.row = PLAYER_SPAWN.row;
     player.x = player.col * TILE + TILE / 2;
     player.y = player.row * TILE + TILE / 2;
+    player.xFx = player.x; player.yFx = player.y;   // stale sub-tile position from the last level would teleport us
     player.vx = 0; player.vy = 0;
     player.facing = 1;
     player.onLadder = false;
     player.isClimbing = false;
     player.isFalling = false;
     player.digCooldown = 0;
+    player.digging = null;
     player.laddersShown = false;
     player.alive = true;
     player.goldCollected = 0;
@@ -295,6 +312,15 @@ anymore (removed in v0.3.6; see the README for what it used to be).
 
   function updatePlayer(dt) {
     if (!player.alive) return;
+    if (player.digging) {
+      player.digging.left -= dt;
+      if (player.digging.left <= 0) {
+        const { col, row } = player.digging;
+        player.digging = null;
+        tryDig(col, row);
+      }
+      return;                                    // frozen while digging
+    }
     const wantsLeft = keys['ArrowLeft'];
     const wantsRight = keys['ArrowRight'];
     const wantsUp = keys['ArrowUp'];
@@ -334,18 +360,22 @@ anymore (removed in v0.3.6; see the README for what it used to be).
       // Fall straight down the middle of the column, like the original —
       // no mid-air steering, and no landing half-overlapping a wall.
       dx = 0;
-      player.xFx = player.x = player.col * TILE + TILE / 2;
-    } else if (isSolidAt(player.col, player.row + 1) || holdingRope) {
-      player.isFalling = false;
+    } else {
+      player.isFalling = false;   // supported by floor, ladder or rope
     }
-    // Hmm — that lets dy default to 0 if on ladder and on ground. Good.
+    // Landing: a fall carries on until the runner is centred on the tile it landed in (it can
+    // cross the tile boundary a few pixels above the middle), so gold there is picked up.
+    if (dy === 0 && !wantsClimb && !player.onLadder && !holdingRope && isSolidAt(player.col, player.row + 1)
+        && player.y < player.row * TILE + TILE / 2 - 0.01) {
+      dy = 1;
+    }
 
     // Climbing out of a pit: standing in a hole (a dug one, so its
     // neighbours at this row are wall) and pushing toward a side hops up
     // onto the floor beside it. The original manual says the runner can't
     // climb out of a pit at all; in practice that just turned a slip into
     // a death, so this is a deliberate, easy-to-revert softening.
-    if (dx !== 0 && !player.isFalling && holeAt(player.col, player.row)) {
+    if (pitEscape && dx !== 0 && !player.isFalling && holeAt(player.col, player.row)) {
       const tc = player.col + dx, tr = player.row - 1;
       if (isSolidAt(tc, player.row) && isPassableAt(tc, tr) && !isSolidAt(tc, tr)) {
         player.col = tc; player.row = tr;
@@ -360,12 +390,16 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     // left, which made the column lag the sprite by up to half a tile and
     // let you fall "half" into holes). Walls stop the centre at the middle
     // of the current tile rather than snapping back each frame.
+    // (After a fall or a ladder the runner is off the row's centre line: the original settles onto it
+    // first and only then starts running, so horizontal input waits for that.)
+    if (dx !== 0 && !player.isFalling && Math.abs(player.y - (player.row * TILE + TILE / 2)) > 0.01) dx = 0;
     if (dx !== 0) {
       if (player.xFx === undefined) player.xFx = player.x;
       let nx = player.xFx + dx * PLAYER_SPEED * dt;
       const cur = Math.floor(player.x / TILE);
       const next = cur + dx;
-      if (!(next >= 0 && next < COLS && isPassableAt(next, player.row))) {
+      // A trapdoor looks like brick, so it is a wall from the side (you only fall through it from above).
+      if (!(next >= 0 && next < COLS && isPassableAt(next, player.row) && tileAt(next, player.row) !== T_TRAP)) {
         const mid = cur * TILE + TILE / 2;
         if ((dx > 0 && nx > mid) || (dx < 0 && nx < mid)) nx = mid;
       }
@@ -375,6 +409,12 @@ anymore (removed in v0.3.6; see the README for what it used to be).
       player.x = player.xFx;
     } else {
       player.xFx = player.x;
+      // Climbing or falling pulls the runner back to the middle of the column
+      // (the original recentres at the same rate it runs).
+      if (dy !== 0) {
+        const cx = player.col * TILE + TILE / 2, step = PLAYER_SPEED * dt;
+        player.xFx = player.x = Math.abs(cx - player.x) <= step ? cx : player.x + Math.sign(cx - player.x) * step;
+      }
     }
     // Vertical movement (climbing and falling). Same rules as horizontal:
     // the row is floor(centre / TILE) both ways, and when the next row
@@ -387,9 +427,11 @@ anymore (removed in v0.3.6; see the README for what it used to be).
       let ny = player.yFx + dy * speed * dt;
       const cur = Math.floor(player.y / TILE);
       const next = cur + dy;
-      let allowed = next >= 0 && next < ROWS && isPassableAt(player.col, next);
+      let allowed = next >= 0 && next < ROWS && isPassableAt(player.col, next) && !(dy < 0 && tileAt(player.col, next) === T_TRAP);
       // Climbing needs a ladder here or in the row we're moving into.
-      if (wantsClimb) allowed = allowed && (isLadderAt(player.col, cur) || isLadderAt(player.col, next));
+      // Going UP needs a ladder in the tile you are standing in (you can't grab one from the empty
+      // tile below it); going down also works onto a ladder top below you.
+      if (wantsClimb) allowed = allowed && (dy < 0 ? isLadderAt(player.col, cur) : (isLadderAt(player.col, cur) || isLadderAt(player.col, next)));
       if (!allowed) {
         const mid = cur * TILE + TILE / 2;
         if ((dy > 0 && ny > mid) || (dy < 0 && ny < mid)) ny = mid;
@@ -400,10 +442,18 @@ anymore (removed in v0.3.6; see the README for what it used to be).
       player.y = ny;
     } else {
       player.yFx = player.y;
+      // Running along a row pulls the runner back onto its centre line.
+      if (dy === 0 && (wantsLeft || wantsRight) && !(wantsLeft && wantsRight)) {
+        const cy = player.row * TILE + TILE / 2, step = PLAYER_CLIMB_SPEED * dt;
+        player.yFx = player.y = Math.abs(cy - player.y) <= step ? cy : player.y + Math.sign(cy - player.y) * step;
+      }
     }
 
-    // Gold pickup
-    if (tileAt(player.col, player.row) === T_GOLD) {
+    // Gold pickup: like the original, only when the runner is close to the
+    // middle of the tile (within a quarter of a tile), not on first touch.
+    if (tileAt(player.col, player.row) === T_GOLD
+        && Math.abs(player.x - (player.col * TILE + TILE / 2)) < TILE / 4
+        && Math.abs(player.y - (player.row * TILE + TILE / 2)) < TILE / 4) {
       setTile(player.col, player.row, T_EMPTY);
       player.goldCollected++;
       Audio.gold();
@@ -416,32 +466,33 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     if (player.goldCollected >= player.goldTotal && player.row === 0) {
       triggerWin();
     }
-    // Snap to tile center only at ladder touches or when movement stopped.
-    // Otherwise player.x already tracks player.xFrac continuously.
-    if (!dx && !dy) {
-      player.x = player.col * TILE + TILE / 2;
-      player.y = player.row * TILE + TILE / 2;
-    }
-
-    // Dig bricks. Targets one row BELOW the player, diagonally — the
-    // floor you're standing over, not a wall beside you. (This was
-    // previously same-row, which only ever worked on the placeholder
-    // level's ladder-embedded floor rows; real levels put the floor
-    // under the walking row, so same-row digging couldn't reach it.)
-    player.digCooldown = Math.max(0, player.digCooldown - dt);
-    if (player.digCooldown <= 0) {
-      if (keys['KeyZ']) {
-        if (tryDig(player.col - 1, player.row + 1)) {
-          player.digCooldown = DIG_RECHARGE_MS / 1000;
-          player.digUntil = performance.now() + 240; player.digDir = -1; player.facing = -1;
-        }
-      } else if (keys['KeyX']) {
-        if (tryDig(player.col + 1, player.row + 1)) {
-          player.digCooldown = DIG_RECHARGE_MS / 1000;
-          player.digUntil = performance.now() + 240; player.digDir = 1; player.facing = 1;
-        }
+    // Dig bricks. Targets one row BELOW the player, diagonally. The original's
+    // rule (ok2Dig in the reference port): the brick diagonally below must be
+    // plain brick, and the tile beside you must be empty — not gold, ladder,
+    // rope or trapdoor (a not-yet-revealed hidden ladder counts as empty).
+    // Only from solid footing, and the runner is frozen while digging.
+    if (!player.isFalling) {
+      let d = 0;
+      if (keys['KeyZ']) d = -1; else if (keys['KeyX']) d = 1;
+      if (d && canDig(player.col, player.row, d)) {
+        player.digging = { col: player.col + d, row: player.row + 1, left: DIG_TIME_MS / 1000 };
+        player.facing = d;
+        player.digDir = d;
+        player.digUntil = performance.now() + DIG_TIME_MS;
+        player.x = player.xFx = player.col * TILE + TILE / 2;
+        player.y = player.yFx = player.row * TILE + TILE / 2;
       }
     }
+  }
+
+  function canDig(col, row, d) {
+    const sc = col + d, br = row + 1;
+    if (sc < 0 || sc >= COLS || br >= ROWS) return false;
+    if (level[br][sc] !== T_BRICK) return false;
+    const side = tileAt(sc, row);
+    const sideEmpty = side === T_EMPTY || side === T_RUNNER_SPAWN || side === T_GRUNTER_SPAWN
+      || (side === T_FREE_LADDER && !laddersRevealed());
+    return sideEmpty;
   }
 
   function tryDig(col, row) {
@@ -545,9 +596,27 @@ anymore (removed in v0.3.6; see the README for what it used to be).
       // until it's recovered (win check only counts what the PLAYER
       // has collected), which is the point: some levels require
       // trapping a gold-carrying guard specifically.
-      if (tileAt(col, row) === T_GOLD && !e.carryingGold) {
+      if (tileAt(col, row) === T_GOLD && !e.carryingGold && !(e.goldWait > 0)) {
         setTile(col, row, T_EMPTY);
         e.carryingGold = true;
+        // ...but not for good: in the original a guard drops what it picked up after 12-37
+        // steps, wherever it can (empty tile with floor or a ladder under it), and then
+        // waits a step before it will take gold again. A guard holding gold forever could
+        // make a level unwinnable.
+        e.goldSteps = 12 + Math.floor(Math.random() * 26);
+      }
+      if (e.lastTileKey !== row * COLS + col) {
+        e.lastTileKey = row * COLS + col;
+        if (e.goldWait > 0) e.goldWait--;
+        if (e.carryingGold && --e.goldSteps <= 0) {
+          const t = tileAt(col, row);
+          const supported = row >= ROWS - 1 || isSolidAt(col, row + 1) || isLadderAt(col, row + 1);
+          if ((t === T_EMPTY || t === T_RUNNER_SPAWN || t === T_GRUNTER_SPAWN) && supported) {
+            setTile(col, row, T_GOLD);
+            e.carryingGold = false;
+            e.goldWait = 2;
+          }
+        }
       }
 
       // 0. Trapped in a dug hole? Enemies caught standing in an open
@@ -1097,26 +1166,33 @@ anymore (removed in v0.3.6; see the README for what it used to be).
   });
 
   // ---------------- Main loop ----------------
+  // One simulation step (no drawing). Split out of loop() so the headless
+  // play test (scripts/playtest.py) can run the real game logic at full
+  // speed on a virtual clock.
+  function tick(dt) {
+    if (gameState === 'playing') {
+      const ox = player.x, oy = player.y;
+      updatePlayer(dt);
+      const moved = Math.abs(player.x - ox) + Math.abs(player.y - oy);
+      player.animDist = (player.animDist || 0) + moved;
+      player.moved = moved > 0.01;
+      if (!player.laddersShown && laddersRevealed()) {
+        player.laddersShown = true;
+        if (level.some(r => r.includes(T_FREE_LADDER))) Audio.reveal();
+      }
+      updateEnemies(dt);
+      updateHoles();
+      updateHud();
+    }
+  }
+
   function loop(t) {
     if (!lastTime) lastTime = t;
     let dt = (t - lastTime) / 1000;
     if (dt > 0.05) dt = 0.05;
     lastTime = t;
     try {
-      if (gameState === 'playing') {
-        const ox = player.x, oy = player.y;
-        updatePlayer(dt);
-        const moved = Math.abs(player.x - ox) + Math.abs(player.y - oy);
-        player.animDist = (player.animDist || 0) + moved;
-        player.moved = moved > 0.01;
-        if (!player.laddersShown && laddersRevealed()) {
-          player.laddersShown = true;
-          if (level.some(r => r.includes(T_FREE_LADDER))) Audio.reveal();
-        }
-        updateEnemies(dt);
-        updateHoles();
-        updateHud();
-      }
+      tick(dt);
       render();
     } catch (err) {
       console.error('frame error (game continues):', err);
@@ -1188,6 +1264,15 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     // spawn was already set rather than guessing one.
     loadLevel: (id) => loadLevelById(id),
     getCurrentLevelId: () => currentLevelId,
+    // Headless play-test hooks (scripts/playtest.py): step the real
+    // simulation without drawing, drive the keys, read the grid.
+    clearEnemies: () => { enemies = []; },
+    getPlayerDebug: () => ({ digging: player.digging, isFalling: player.isFalling, onLadder: player.onLadder, isClimbing: player.isClimbing, facing: player.facing }),
+    setPitEscape: (on) => { pitEscape = !!on; },
+    tick: (dt) => tick(dt),
+    setKeys: (down) => { for (const k of Object.keys(keys)) keys[k] = false; for (const k of down) keys[k] = true; },
+    getGrid: () => level.map(r => r.slice()),
+    getHoles: () => digHoles.map(h => ({ ...h })),
     getHighestCleared: () => highestCleared,
     getLaddersRevealed: () => laddersRevealed(),
     resetProgress: () => {
