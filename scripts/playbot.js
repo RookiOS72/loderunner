@@ -28,10 +28,10 @@
   const DT = 1 / 60;
 
   // Rough real-time costs (seconds) for the planner's hole timers.
-  const COST = { walk: 0.27, climb: 0.27, fall: 0.27, dig: 0.6, escape: 0.3 };
-  const HOLE_SAFE_S = 9.2;          // engine refills at 9.9s; keep a margin
+  const COST = { walk: 0.27, climb: 0.27, fall: 0.27, dig: 0.64, escape: 0.3 };
+  const HOLE_SAFE_S = 8.9;          // engine refills at 9.6s; keep a margin
   const MAX_NODES = 400000;
-const HOLE_GONE_S = 12;            // after this a hole is certainly closed
+const HOLE_GONE_S = 11.7;            // after this a hole is certainly closed
 const HOLE_KEEP_DIST = 99;
 const MAX_SEG_DIGS = 6;
 const DIG_PENALTY = 3;           // search-cost of a dig (in walking-seconds); real time is COST.dig
@@ -226,7 +226,7 @@ const H_WEIGHT = 2.5;              // weighted A*: we want a plan, not the cheap
       }
       return null;
     };
-    const first = L.getHoles().map(h => [h.col, h.row, (h.refillAt - clock) / 1000 - 9.9]);
+    const first = L.getHoles().map(h => [h.col, h.row, (h.refillAt - clock) / 1000 - 9.6]);
     const segs = rec(g0, p, gold.collected, first);
     if (segs) return { segs };
     return {

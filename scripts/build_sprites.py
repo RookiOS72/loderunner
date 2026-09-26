@@ -66,13 +66,28 @@ def parse_tex(text):
     return sprites
 
 
+# Tiles and the dig / refill / respawn art, by sprite number (main.asm: SPRITE_* and the
+# DIG_* tables). Frames are 14 columns wide but the board tile is 10 columns; only the
+# first 10 matter for tiles.
+APPLE2_TILES = {
+    "brick": [1], "solid": [2], "ladder": [3], "rope": [4], "gold": [7],
+    "digBrick": [0x1F, 0x20, 0x21, 0x22, 0x23, 0x24],   # the brick being dug out, 6 stages
+    "debrisLeft": [0x1B, 0x1C, 0x1D, 0x1E],             # dirt flying above the dig, digging left
+    "debrisRight": [0x26, 0x27, 0x1D, 0x1E],            # ...digging right
+    "fill": [0x37, 0x38],                               # the hole closing, 2 stages
+    "egg": [0x39, 0x3A],                                # a guard coming back
+}
+
+
 def from_apple2(tex_text):
     sp = parse_tex(tex_text)
-    return {
+    out = {
         who: {anim: {side: [sp[i] for i in ids] for side, ids in sides.items()}
               for anim, sides in anims.items()}
         for who, anims in APPLE2_FRAMES.items()
     }
+    out["tiles"] = {name: [sp[i] for i in ids] for name, ids in APPLE2_TILES.items()}
+    return out
 
 
 # ------------------------------------------------------------------- own ----
@@ -187,5 +202,5 @@ if __name__ == "__main__":
     )
     with open(os.path.join(ROOT, "sprites.js"), "w") as f:
         f.write(js)
-    n = sum(len(fr) for d in data.values() for a in d.values() for fr in a.values())
+    n = sum(len(fr) for k, d in data.items() if k != 'tiles' for a in d.values() for fr in a.values())
     print(f"Wrote sprites.js ({n} frames, source={args.source})")
