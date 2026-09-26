@@ -36,10 +36,6 @@ anymore (removed in v0.3.6; see the README for what it used to be).
   // opens when that finishes.
   const DIG_TIME_MS        = 587;
 
-  const RUNNER_SPEED     = 35;
-  const GRUNTER_SPEED    = 25;
-  const ENEMY_FALL_SPEED = 120;
-  const ENEMY_RESPAWN_MS = 5000;
 
   // A dug hole closes back up into a brick after this long. Anyone still
   // standing in it when it closes dies. Timings are the original's,
@@ -54,7 +50,6 @@ anymore (removed in v0.3.6; see the README for what it used to be).
   // close up around them"; the player can hop out at will by pushing toward
   // a side (see the pit-escape block in updatePlayer).
   const HOLE_REFILL_MS   = 9900;
-  const ENEMY_ESCAPE_MS  = 3800;
 
   // Deliberate softening of the original (see updatePlayer): the runner may hop out of a pit.
   let pitEscape = true;
@@ -252,42 +247,26 @@ anymore (removed in v0.3.6; see the README for what it used to be).
   }
 
   // ---------------- Enemy init ----------------
+  // The original never has more than 5 guards on a level; when the data has
+  // more, the first ones in reading order are left out.
+  const MAX_GUARDS = 5;
   function spawnEnemiesForLevel() {
     enemies = [];
-    for (const spawn of enemySpawns) {
-      if (spawn.type === T_RUNNER_SPAWN) {
-        enemies.push(makeRunner(spawn.col, spawn.row));
-      } else if (spawn.type === T_GRUNTER_SPAWN) {
-        enemies.push(makeGrunter(spawn.col, spawn.row));
-      }
-    }
+    guardAcc = 0; moveOffset = 0; moveId = 0;
+    const spawns = enemySpawns.length > MAX_GUARDS ? enemySpawns.slice(enemySpawns.length - MAX_GUARDS) : enemySpawns;
+    for (const spawn of spawns) enemies.push(makeGuard(spawn.col, spawn.row, spawn.type === T_GRUNTER_SPAWN ? 'grunter' : 'runner'));
   }
-  function makeRunner(col, row) {
+  function makeGuard(col, row, kind) {
     return {
-      kind: 'runner', col, row,
+      kind, col, row, ox: 0, oy: 0,
       x: col * TILE + TILE / 2, y: row * TILE + TILE / 2,
-      vx: RUNNER_SPEED, vy: 0,
+      act: 'stop',              // stop | left | right | up | down | fall | fallbar | inhole | climbout | reborn
       facing: 1,
-      state: 'patrol',
-      respawnAt: 0,
-      alive: true,
-      inHole: false,
-      trappedUntil: 0,
-      carryingGold: false,
-    };
-  }
-  function makeGrunter(col, row) {
-    return {
-      kind: 'grunter', col, row,
-      x: col * TILE + TILE / 2, y: row * TILE + TILE / 2,
-      vx: 0, vy: 0,
-      facing: 1,
-      state: 'patrol',
-      respawnAt: 0,
-      alive: true,
-      inHole: false,
-      trappedUntil: 0,
-      carryingGold: false,
+      hasGold: 0,               // >0: carrying, counting down steps; <0: waiting before it may pick up again
+      alive: true,              // (kept for the test hooks; a guard is always "alive", it respawns when it dies)
+      inHole: false, isFalling: false, vertical: false,
+      shakeT: 0, rebornT: 0, holeCol: 0, holeRow: 0,
+      animDist: 0,
     };
   }
 
@@ -313,6 +292,11 @@ anymore (removed in v0.3.6; see the README for what it used to be).
   function updatePlayer(dt) {
     if (!player.alive) return;
     if (player.digging) {
+      // A guard stepping onto the tile beside you early in the dig spoils it (the brick stays).
+      if (player.digging.left > (DIG_TIME_MS / 1000) * 0.4 && guardOccupies(player.digging.col, player.digging.row - 1)) {
+        player.digging = null; player.digUntil = 0;
+        return;
+      }
       player.digging.left -= dt;
       if (player.digging.left <= 0) {
         const { col, row } = player.digging;
@@ -354,7 +338,7 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     const holdingRope = onRope && !player.onLadder && !wantsDown;
 
     // Falling: if not on ladder, not holding a rope, and no solid below, fall down
-    if (!wantsClimb && !player.onLadder && !holdingRope && !isSolidAt(player.col, player.row + 1)) {
+    if (!wantsClimb && !player.onLadder && !holdingRope && !isSolidAt(player.col, player.row + 1) && !guardOccupies(player.col, player.row + 1)) {
       player.isFalling = true;
       dy = 1;
       // Fall straight down the middle of the column, like the original —
@@ -365,7 +349,7 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     }
     // Landing: a fall carries on until the runner is centred on the tile it landed in (it can
     // cross the tile boundary a few pixels above the middle), so gold there is picked up.
-    if (dy === 0 && !wantsClimb && !player.onLadder && !holdingRope && isSolidAt(player.col, player.row + 1)
+    if (dy === 0 && !wantsClimb && !player.onLadder && !holdingRope && (isSolidAt(player.col, player.row + 1) || guardOccupies(player.col, player.row + 1))
         && player.y < player.row * TILE + TILE / 2 - 0.01) {
       dy = 1;
     }
@@ -521,192 +505,363 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     }
   }
 
-  // Where a guard's dropped gold can go: a tile that is truly free (empty,
-  // or just a spawn marker) so it never overwrites other gold, a ladder,
-  // or a rope. Prefers the tile straight above the pit (where the player
-  // who dug it is standing), then the nearest free tile around it, and
-  // prefers ones with floor underneath so the gold isn't floating.
-  function isFreeForGold(col, row) {
-    if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return false;
-    const t = level[row][col];
-    return t === T_EMPTY || t === T_RUNNER_SPAWN || t === T_GRUNTER_SPAWN;
-  }
-  function dropGoldNear(col, row) {
-    const cands = [];
-    for (let dy = -1; dy >= -4; dy--) {
-      for (const dx of [0, -1, 1, -2, 2]) cands.push([dx, dy]);
-    }
-    cands.sort((a, b) => (Math.abs(a[0]) + Math.abs(a[1])) - (Math.abs(b[0]) + Math.abs(b[1])));
-    for (const needFloor of [true, false]) {
-      for (const [dx, dy] of cands) {
-        const c = col + dx, r = row + dy;
-        if (!isFreeForGold(c, r)) continue;
-        if (needFloor && !isSolidAt(c, r + 1)) continue;
-        setTile(c, r, T_GOLD);
-        return true;
-      }
-    }
-    return false; // nowhere free — the guard keeps carrying it
-  }
+  // ---------------- Guards ----------------
+  // Written from the original's observable behaviour (checked against the
+  // reference port with scripts/conform.py --guards), not copied from it.
+  //
+  // Guards run on the original's clock: one guard "tick" is 1/18.75 s (five
+  // ticks to cross a tile at the runner's speed). How many guard-steps happen
+  // per tick depends on how many guards there are, which is what makes a
+  // lone guard half as fast as the runner and a crowd slower still.
+  const G_TICK   = 0.053333;
+  const G_XSTEP  = TILE * 8 / 40;       // 3.2px a tick sideways
+  const G_YSTEP  = TILE * 9 / 44;       // ~3.27px a tick up, down or falling
+  const G_HALF   = TILE / 2;
+  const G_QUARTER = TILE / 4;
+  const G_MOVES  = [null, [0, 1, 0, 1, 0, 1], [1, 1, 1, 1, 1, 1], [1, 2, 1, 1, 2, 1], [1, 2, 2, 1, 2, 2], [2, 2, 2, 2, 2, 2]];
+  const SHAKE_TICKS  = 66;              // held 51 ticks, then shakes, then it climbs out
+  const REBORN_TICKS = 8;
+  const RUNNER_TOUCH = TILE * 0.75;     // guard and runner this close (both axes) = caught
 
-  function killEnemyInHole(e) {
-    e.alive = false;
-    e.inHole = false;
-    e.respawnAt = performance.now() + ENEMY_RESPAWN_MS;
-    if (e.carryingGold && dropGoldNear(e.col, e.row)) e.carryingGold = false;
-    Audio.enemyDeath();
-  }
+  let guardAcc = 0, moveOffset = 0, moveId = 0;
 
-  // ---------------- Enemy update ----------------
-  // Cleaner, actually-working logic. Both enemy types share a top-level
-  // decision tree: falling first (no solid below), then patrol, then
-  // chase if player is close on same row.
+  // What a tile is made of (base) vs what is standing on it (act), as guards
+  // see them. A dug hole is still brick underneath, and a hidden ladder is
+  // empty until it appears.
+  const B_EMPTY = 0, B_BLOCK = 1, B_SOLID = 2, B_LADDR = 3, B_BAR = 4, B_TRAP = 5, B_HLADR = 6, B_GOLD = 7;
+  const A_EMPTY = 0, A_BLOCK = 1, A_SOLID = 2, A_LADDR = 3, A_BAR = 4, A_TRAP = 5, A_GUARD = 8, A_RUNNER = 9;
+  function gBase(c, r) {
+    if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return B_SOLID;
+    if (holeAt(c, r)) return B_BLOCK;
+    switch (level[r][c]) {
+      case T_BRICK: return B_BLOCK;
+      case T_SOLID: return B_SOLID;
+      case T_LADDER: return B_LADDR;
+      case T_FREE_LADDER: return laddersRevealed() ? B_LADDR : B_HLADR;
+      case T_GOLD: return B_GOLD;
+      case T_ROPE: return B_BAR;
+      case T_TRAP: return B_TRAP;
+      default: return B_EMPTY;
+    }
+  }
+  function guardTileAt(c, r) {
+    for (const g of enemies) if (g.col === c && g.row === r) return g;
+    return null;
+  }
+  function gAct(c, r) {
+    if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return A_SOLID;
+    if (guardTileAt(c, r)) return A_GUARD;
+    if (player.col === c && player.row === r) return A_RUNNER;
+    if (holeAt(c, r)) return A_EMPTY;
+    switch (level[r][c]) {
+      case T_BRICK: return A_BLOCK;
+      case T_SOLID: return A_SOLID;
+      case T_LADDER: return A_LADDR;
+      case T_FREE_LADDER: return laddersRevealed() ? A_LADDR : A_EMPTY;
+      case T_ROPE: return A_BAR;
+      case T_TRAP: return A_TRAP;
+      default: return A_EMPTY;     // includes gold and spawn markers
+    }
+  }
+  // Can something stand on (c, r)? Solid ground, or a guard.
+  function guardOccupies(c, r) { return !!guardTileAt(c, r); }
+
   function updateEnemies(dt) {
-    const now = performance.now();
-    for (const e of enemies) {
-      if (!e.alive) {
-        if (e.respawnAt > 0 && now >= e.respawnAt) {
-          const spawn = enemySpawns.find(s => s.type === (e.kind === 'runner' ? T_RUNNER_SPAWN : T_GRUNTER_SPAWN));
-          if (spawn) {
-            const fresh = e.kind === 'runner' ? makeRunner(spawn.col, spawn.row) : makeGrunter(spawn.col, spawn.row);
-            fresh.carryingGold = e.carryingGold; // never destroy stolen gold on respawn
-            Object.assign(e, fresh);
-          }
-        }
-        continue;
-      }
+    guardAcc += dt;
+    while (guardAcc >= G_TICK) {
+      guardAcc -= G_TICK;
+      guardTick();
+    }
+    for (const g of enemies) { g.x = g.col * TILE + G_HALF + g.ox; g.y = g.row * TILE + G_HALF + g.oy; }
+    checkCaught();
+  }
 
-      // Determine current tile from pixel position. A tile-center pixel
-      // position is always exactly col*TILE + TILE/2 — a .5 fraction of
-      // TILE — so this MUST be floor(), not round(): round() ties break
-      // upward in JS and would put every entity sitting at its own
-      // tile's center into the tile one column/row over.
-      let col = Math.floor(e.x / TILE);
-      let row = Math.floor(e.y / TILE);
-      if (row < 0) row = 0;
-      if (row >= ROWS) row = ROWS - 1;
-      // Keep the public col/row fields live every frame — previously
-      // these only updated once an enemy landed, so anything reading
-      // them (getEnemyPositions(), the trap check below) saw a stale
-      // spawn-time tile for an enemy that was still mid-fall.
-      e.col = col;
-      e.row = row;
-
-      // Guards steal gold they walk over — the level can't be won
-      // until it's recovered (win check only counts what the PLAYER
-      // has collected), which is the point: some levels require
-      // trapping a gold-carrying guard specifically.
-      if (tileAt(col, row) === T_GOLD && !e.carryingGold && !(e.goldWait > 0)) {
-        setTile(col, row, T_EMPTY);
-        e.carryingGold = true;
-        // ...but not for good: in the original a guard drops what it picked up after 12-37
-        // steps, wherever it can (empty tile with floor or a ladder under it), and then
-        // waits a step before it will take gold again. A guard holding gold forever could
-        // make a level unwinnable.
-        e.goldSteps = 12 + Math.floor(Math.random() * 26);
-      }
-      if (e.lastTileKey !== row * COLS + col) {
-        e.lastTileKey = row * COLS + col;
-        if (e.goldWait > 0) e.goldWait--;
-        if (e.carryingGold && --e.goldSteps <= 0) {
-          const t = tileAt(col, row);
-          const supported = row >= ROWS - 1 || isSolidAt(col, row + 1) || isLadderAt(col, row + 1);
-          if ((t === T_EMPTY || t === T_RUNNER_SPAWN || t === T_GRUNTER_SPAWN) && supported) {
-            setTile(col, row, T_GOLD);
-            e.carryingGold = false;
-            e.goldWait = 2;
-          }
+  function guardTick() {
+    if (!enemies.length) return;
+    for (const g of enemies) {
+      if (g.act === 'inhole') {
+        if (++g.shakeT >= SHAKE_TICKS) { g.act = 'climbout'; g.inHole = false; g.holeCol = g.col; g.holeRow = g.row; }
+      } else if (g.act === 'reborn') {
+        if (++g.rebornT >= REBORN_TICKS) {
+          g.act = 'fall';
+          if (player.col === g.col && player.row === g.row && player.alive) killPlayer();
         }
       }
+    }
+    moveOffset = (moveOffset + 1) % 6;
+    let moves = G_MOVES[Math.min(enemies.length, 5)][moveOffset];
+    while (moves-- > 0) {
+      moveId = (moveId + 1) % enemies.length;
+      const g = enemies[moveId];
+      if (g.act === 'inhole' || g.act === 'reborn') continue;
+      guardStep(g, guardDecide(g));
+    }
+    checkCaught();
+  }
 
-      // 0. Trapped in a dug hole? Enemies caught standing in an open
-      // hole are briefly harmless (skipped in the collision pass below)
-      // and try to climb back out after ENEMY_ESCAPE_MS. If the hole
-      // refills before they escape, updateHoles() kills them.
-      const inActiveHole = !!holeAt(col, row);
-      if (inActiveHole && !e.inHole) {
-        e.inHole = true;
-        e.trappedUntil = now + ENEMY_ESCAPE_MS;
-        Audio.trap();
-        // Trapping releases any gold it was carrying — reappears one
-        // tile above the pit, where the player who dug it is standing.
-        // (Never drop it in the pit tile itself: the enemy is still
-        // standing there, so it would just get immediately re-picked-up
-        // next frame.)
-        if (e.carryingGold && dropGoldNear(col, row)) e.carryingGold = false;
-      } else if (!inActiveHole && e.inHole) {
-        e.inHole = false; // hole was dug elsewhere and this tile refilled/never held one
+  function checkCaught() {
+    if (!player.alive || gameState !== 'playing') return;
+    for (const g of enemies) {
+      if (g.act === 'reborn') continue;
+      const gx = g.col * TILE + G_HALF + g.ox, gy = g.row * TILE + G_HALF + g.oy;
+      if (Math.abs(player.x - gx) <= RUNNER_TOUCH && Math.abs(player.y - gy) <= RUNNER_TOUCH) { killPlayer(); return; }
+    }
+  }
+
+  // ---- deciding where to go ----
+  function guardDecide(g) {
+    let sameLevelOnly = false;
+    if (g.act === 'climbout') {
+      if (g.row === g.holeRow) return 'up';
+      sameLevelOnly = true;
+      if (g.col !== g.holeCol) g.act = 'left';     // clear of the pit: back to normal
+    }
+    if (!sameLevelOnly) {
+      // Gravity first.
+      const here = gBase(g.col, g.row);
+      if (here === B_LADDR || (here === B_BAR && g.oy === 0)) {
+        // held by a ladder or rope
+      } else if (g.oy < 0) {
+        return 'fall';
+      } else if (g.row < ROWS - 1) {
+        const below = gAct(g.col, g.row + 1);
+        if (below === A_EMPTY || below === A_RUNNER) return 'fall';
+        if (!(below === A_BLOCK || below === A_SOLID || below === A_GUARD || below === A_LADDR)) return 'fall';   // rope or trapdoor below: no footing
       }
-      if (e.inHole) {
-        e.isFalling = false;
-        if (now >= e.trappedUntil) {
-          // Climb out onto the floor BESIDE the pit. (Straight up doesn't
-          // work: the empty hole tile below would drop it right back in.)
-          for (const dir of [e.facing, -e.facing]) {
-            const tc = col + dir, tr = row - 1;
-            if (isSolidAt(tc, row) && isPassableAt(tc, tr) && !isSolidAt(tc, tr)) {
-              e.x = tc * TILE + TILE / 2;
-              e.y = tr * TILE + TILE / 2;
-              e.col = tc; e.row = tr;
-              e.facing = dir;
-              e.inHole = false;
-              break;
-            }
-          }
+    }
+    // Runner on the same floor and reachable in a straight line? Go for him.
+    const rc = player.col, rr = player.row;
+    if (g.row === rr && !player.isFalling) {
+      let x = g.col;
+      while (x !== rc) {
+        const y = g.row;
+        const cb = gBase(x, y);
+        const below = y < ROWS - 1 ? gBase(x, y + 1) : B_SOLID;
+        if (cb === B_LADDR || cb === B_BAR || below === B_SOLID || below === B_LADDR || below === B_BLOCK
+            || gAct(x, y + 1) === A_GUARD || below === B_BAR || below === B_GOLD) x += Math.sign(rc - x);
+        else break;
+      }
+      if (x === rc) {
+        if (g.col < rc) return 'right';
+        if (g.col > rc) return 'left';
+        const rox = player.x - (rc * TILE + G_HALF);
+        return g.ox < rox ? 'right' : 'left';
+      }
+    }
+    return guardScanFloor(g);
+  }
+
+  // Otherwise look along the floor for the best place to go up or down.
+  // A column is rated by where a ladder up / a drop down there would leave
+  // the guard relative to the runner: on his row (rated by distance) beats
+  // above him beats below him.
+  function guardScanFloor(g) {
+    const sx = g.col, sy = g.row, rr = player.row;
+    let best = 255, bestDir = 'stop';
+    const floorUnder = (c, r) => { const b = gBase(c, r); return b === B_BLOCK || b === B_SOLID; };
+    const footing = (c, r) => { const b = gBase(c, r + 1); return b === B_BLOCK || b === B_SOLID || b === B_LADDR; };
+
+    // How far can it walk each way along this floor?
+    const reach = (dir) => {
+      let x = sx;
+      for (;;) {
+        const nx = x + dir;
+        if (nx < 0 || nx >= COLS) break;
+        const a = gAct(nx, sy);
+        if (a === A_BLOCK || a === A_SOLID) break;
+        const ok = a === A_LADDR || a === A_BAR || sy >= ROWS - 1 || footing(nx, sy);
+        x = nx;
+        if (!ok) break;              // steps off the edge; can go no further
+      }
+      return x;
+    };
+    const left = reach(-1), right = reach(1);
+
+    const rate = (endRow, x) => endRow === rr ? Math.abs(sx - x) : endRow > rr ? endRow - rr + 200 : rr - endRow + 100;
+    const sideOpen = (c, r) => c >= 0 && c < COLS && (footing(c, r) || gBase(c, r + 1) === B_LADDR || gBase(c, r) === B_BAR);
+
+    const tryDown = (x, dir) => {
+      let y = sy;
+      while (y < ROWS - 1 && !floorUnder(x, y + 1)) {
+        if (gBase(x, y) !== B_EMPTY && gBase(x, y) !== B_HLADR) {
+          // not simply falling: could it step off sideways here instead?
+          if (x > 0 && sideOpen(x - 1, y) && y >= rr) break;
+          if (x < COLS - 1 && sideOpen(x + 1, y) && y >= rr) break;
         }
-        if (e.inHole) e.row = row;
-        continue; // frozen in the pit otherwise — no patrol/chase/fall
+        y++;
       }
-
-      // 1. Falling? If no solid below and not hanging on a rope, fall at
-      // fall-speed px/s. Enemies hang on ropes the same as the player —
-      // several original levels rely on guards patrolling rope rows
-      // instead of dropping straight through them.
-      if (!isSolidAt(col, row + 1) && !isRopeAt(col, row)) {
-        e.isFalling = true;
-        e.y += ENEMY_FALL_SPEED * dt;
-        continue;
+      const rt = rate(y, x);
+      if (rt < best) { best = rt; bestDir = dir; }
+    };
+    const tryUp = (x, dir) => {
+      let y = sy;
+      while (y > 0 && gBase(x, y) === B_LADDR) {
+        y--;
+        if (x > 0 && sideOpen(x - 1, y) && y <= rr) break;
+        if (x < COLS - 1 && sideOpen(x + 1, y) && y <= rr) break;
       }
-      e.isFalling = false;
-      // 2. On solid ground. Snap y to tile-center line, clamp to valid range.
-      const groundY = (row + 1) * TILE - TILE / 2;
-      const maxY = (ROWS - 1) * TILE + TILE;
-      e.y = Math.min(groundY, maxY);
-      e.vy = 0;
+      const rt = rate(y, x);
+      if (rt < best) { best = rt; bestDir = dir; }
+    };
+    const canDrop = (x) => sy < ROWS - 1 && !floorUnder(x, sy + 1);
 
-      // 3. Decide direction: chase player if on same row and close, else patrol.
-      let dir = e.facing;
-      if (player.row === row && Math.abs(player.col - col) < 8) {
-        dir = player.col > col ? 1 : -1;
+    // straight down / up from where it stands first, then the left half, then the right half
+    if (canDrop(sx)) tryDown(sx, 'down');
+    if (gBase(sx, sy) === B_LADDR) tryUp(sx, 'up');
+    for (let x = left; x < sx; x++) {
+      if (canDrop(x)) tryDown(x, 'left');
+      if (gBase(x, sy) === B_LADDR) tryUp(x, 'left');
+    }
+    if (right !== sx) {
+      for (let x = right; x > sx; x--) {
+        if (canDrop(x)) tryDown(x, 'right');
+        if (gBase(x, sy) === B_LADDR) tryUp(x, 'right');
       }
+    }
+    return bestDir;
+  }
 
-      // 4. Move horizontally at proper pixel/sec rate (no more per-frame tile jumps).
-      const speed = e.kind === 'runner' ? RUNNER_SPEED : GRUNTER_SPEED;
-      const nextX = e.x + dir * speed * dt;
-      let nextCol = Math.floor(nextX / TILE);
-      // Bounce off walls and bricks
-      if (nextCol < 0 || nextCol >= COLS) {
-        e.facing = -dir;
-      } else if (isSolidAt(nextCol, row)) {
-        e.facing = -dir;
+  // ---- carrying gold ----
+  // A guard that picks gold up carries it for 12-37 steps, then drops it on
+  // the next spot with something under it, and waits a step before it will
+  // take any again.
+  function guardMaybeDropGold(g) {
+    if (g.hasGold > 1) { g.hasGold--; return; }
+    if (g.hasGold === 1) {
+      const under = g.row >= ROWS - 1 ? B_SOLID : gBase(g.col, g.row + 1);
+      if (gBase(g.col, g.row) === B_EMPTY && (under === B_BLOCK || under === B_SOLID || under === B_LADDR)) {
+        setTile(g.col, g.row, T_GOLD);
+        g.hasGold = -1;
+      }
+      return;
+    }
+    if (g.hasGold < 0) g.hasGold++;
+  }
+
+  // ---- taking one step ----
+  function guardStep(g, action) {
+    let ox = g.ox, oy = g.oy, col = g.col, row = g.row;
+    let blocked = false, centreX = 0, centreY = 0;
+    if (g.act === 'climbout' && action === 'stop') g.act = 'stop';
+
+    if (action === 'up' || action === 'down' || action === 'fall') {
+      if (action === 'up') {
+        const a = row <= 0 ? A_SOLID : gAct(col, row - 1);
+        blocked = a === A_BLOCK || a === A_SOLID || a === A_TRAP || a === A_GUARD;
+        if (oy <= 0 && blocked) action = 'stop';
       } else {
-        e.animDist = (e.animDist || 0) + Math.abs(nextX - e.x);
-        e.x = nextX;
-        e.col = nextCol;
-        e.facing = dir;
+        const a = row >= ROWS - 1 ? A_SOLID : gAct(col, row + 1);
+        blocked = a === A_BLOCK || a === A_SOLID || a === A_GUARD;
+        if (action === 'fall' && oy < 0 && gBase(col, row) === B_BLOCK) { action = 'inhole'; blocked = true; }
+        else if (oy >= 0 && blocked) action = 'stop';
       }
-      e.row = row;
+      if (action !== 'stop') centreX = ox > 0 ? -1 : ox < 0 ? 1 : 0;
+    } else if (action === 'left' || action === 'right') {
+      const d = action === 'left' ? -1 : 1;
+      const nc = col + d;
+      const a = nc < 0 || nc >= COLS ? A_SOLID : gAct(nc, row);
+      blocked = a === A_BLOCK || a === A_SOLID || a === A_GUARD || gBase(nc, row) === B_TRAP;
+      if ((d < 0 ? ox <= 0 : ox >= 0) && blocked) action = 'stop';
+      if (action !== 'stop') centreY = oy > 0 ? -1 : oy < 0 ? 1 : 0;
     }
 
-    // Enemy-player collision — trapped enemies are safe to walk over,
-    // per the original ("safe for a moment to run over him").
-    for (const e of enemies) {
-      if (!e.alive || e.inHole) continue;
-      if (Math.abs(player.y - e.y) < TILE * 0.7 && Math.abs(player.x - e.x) < TILE * 0.7) {
-        killPlayer();
-        return;
+    g.vertical = action === 'up' || action === 'down';
+    if (action === 'up') {
+      oy -= G_YSTEP;
+      if (blocked && oy < 0) oy = 0;
+      else if (oy < -G_HALF) { row--; oy += TILE; }
+      if (oy <= 0 && oy > -G_YSTEP) guardMaybeDropGold(g);
+    }
+    if (centreY < 0) { oy -= G_YSTEP; if (oy < 0) oy = 0; }
+
+    if (action === 'down' || action === 'fall' || action === 'inhole') {
+      let holdBar = false;
+      if (gBase(col, row) === B_BAR) {
+        if (oy < 0) holdBar = true;
+        else if (action === 'down' && row < ROWS - 1 && gAct(col, row + 1) !== A_LADDR) action = 'fall';
+      }
+      oy += G_YSTEP;
+      if (holdBar && oy >= 0) { oy = 0; action = 'fallbar'; }
+      if (blocked && oy > 0) oy = 0;
+      else if (oy > G_HALF) { row++; oy -= TILE; }
+      if ((action === 'fall' || action === 'down') && oy >= 0 && oy < G_YSTEP) guardMaybeDropGold(g);
+
+      if (action === 'inhole') {
+        if (oy < 0) {
+          action = 'fall';                       // still on the way in
+          if (g.hasGold > 0) guardSpillGold(g, col, row);
+        } else {                                  // landed in the pit
+          if (g.hasGold > 0) guardSpillGold(g, col, row);
+          g.hasGold = 0;
+          g.act = 'inhole'; g.inHole = true; g.shakeT = 0;
+          Audio.trap();
+          action = 'inhole';
+        }
       }
     }
+    if (centreY > 0) { oy += G_YSTEP; if (oy > 0) oy = 0; }
+
+    if (action === 'left') {
+      ox -= G_XSTEP;
+      if (blocked && ox < 0) ox = 0;
+      else if (ox < -G_HALF) { col--; ox += TILE; }
+      if (ox <= 0 && ox > -G_XSTEP) guardMaybeDropGold(g);
+      g.facing = -1;
+    }
+    if (centreX < 0) { ox -= G_XSTEP; if (ox < 0) ox = 0; }
+    if (action === 'right') {
+      ox += G_XSTEP;
+      if (blocked && ox > 0) ox = 0;
+      else if (ox > G_HALF) { col++; ox -= TILE; }
+      if (ox >= 0 && ox < G_XSTEP) guardMaybeDropGold(g);
+      g.facing = 1;
+    }
+    if (centreX > 0) { ox += G_XSTEP; if (ox > 0) ox = 0; }
+
+    ox = Math.round(ox * 1e4) / 1e4; oy = Math.round(oy * 1e4) / 1e4;   // keep offsets exact so "centred" means === 0
+    const moved = Math.abs(ox - g.ox) + Math.abs(oy - g.oy) + (col !== g.col || row !== g.row ? TILE : 0);
+    g.animDist += Math.min(moved, TILE);
+    g.col = col; g.row = row; g.ox = ox; g.oy = oy;
+    g.isFalling = action === 'fall' || action === 'fallbar';
+    if (action !== 'stop' && action !== 'inhole' && g.act !== 'climbout') g.act = action;
+    if (g.act === 'climbout' && action === 'up') { /* keep climbing out */ }
+
+    // picking gold up
+    if (gBase(col, row) === B_GOLD && g.hasGold === 0
+        && ((ox === 0 && oy >= 0 && oy < G_QUARTER) || (oy === 0 && ox >= 0 && ox < G_QUARTER)
+            || (row < ROWS - 1 && gBase(col, row + 1) === B_LADDR && oy < G_QUARTER))) {
+      g.hasGold = 12 + Math.floor(Math.random() * 26);
+      setTile(col, row, T_EMPTY);
+    }
+  }
+
+  // Gold a guard is carrying when it drops into a pit reappears on the tile
+  // above if that is empty; otherwise it is lost — and counts as collected.
+  function guardSpillGold(g, col, row) {
+    if (gBase(col, row - 1) === B_EMPTY && row > 0) setTile(col, row - 1, T_GOLD);
+    else player.goldCollected++;
+    g.hasGold = 0;
+  }
+
+  // A pit refilling over a guard kills it; it comes back somewhere near the top.
+  function killEnemyInHole(g) {
+    if (g.hasGold > 0) player.goldCollected++;
+    g.hasGold = 0;
+    g.inHole = false; g.isFalling = false;
+    const order = [];
+    for (let c = 0; c < COLS; c++) order.push(c);
+    for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
+    let bc = 0, br = 1, found = false;
+    for (br = 1; br < ROWS && !found; br++) {
+      for (const c of order) {
+        const t = level[br][c];
+        if ((t === T_EMPTY || t === T_RUNNER_SPAWN || t === T_GRUNTER_SPAWN) && !holeAt(c, br) && !guardTileAt(c, br)) { bc = c; found = true; break; }
+      }
+      if (found) break;
+    }
+    g.col = bc; g.row = found ? br : 1; g.ox = 0; g.oy = 0;
+    g.act = 'reborn'; g.rebornT = 0;
+    Audio.enemyDeath();
   }
 
   // ---------------- Render ----------------
@@ -875,13 +1030,16 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     const set = e.kind === 'grunter' ? 'grunter' : 'guard';
     const left = e.facing < 0, d = e.animDist || 0;
     let anim = 'run', idx = Math.floor(d / 4) % 3;
+    const onRope = gBase(e.col, e.row) === B_BAR;
+    if (e.act === 'reborn') { ctx2d.globalAlpha = 0.45; drawSprite(set, 'run', 1, left, e.x, e.y); ctx2d.globalAlpha = 1; return; }
     if (e.inHole) idx = 1;
-    else if (e.isFalling) { anim = 'fall'; idx = 0; }
-    else if (isRopeAt(e.col, e.row)) anim = 'monkey';
+    else if (e.isFalling && !onRope) { anim = 'fall'; idx = 0; }
+    else if (e.vertical || e.act === 'climbout') { anim = 'climb'; idx = Math.floor(d / 5) % 2; }
+    else if (onRope) anim = 'monkey';
     drawSprite(set, anim, idx, left, e.x, e.y);
-    if (e.carryingGold) {
-      // Small gold glint above a guard that's stolen a piece — the
-      // level can't be won until this comes back.
+    if (e.hasGold > 0) {
+      // A guard that has stolen a piece: the level can't be won until it is
+      // dropped (or the guard is trapped and it spills).
       ctx2d.fillStyle = '#ffcc33';
       ctx2d.beginPath();
       ctx2d.arc(Math.round(e.x), Math.round(e.y) - TILE / 2 - 3, 2.5, 0, Math.PI * 2);
@@ -905,9 +1063,7 @@ anymore (removed in v0.3.6; see the README for what it used to be).
       return;
     }
     // Enemies (drawn before player so player appears on top)
-    for (const e of enemies) {
-      if (e.alive) renderEnemy(e);
-    }
+    for (const e of enemies) renderEnemy(e);
     // Player
     renderPlayer(player.x, player.y, playerFrame());
   }
@@ -1081,7 +1237,9 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     editorFlash('SAVED', 1200);
   }
 
+  let invulnerable = false;   // test hook only (playtest / conformance runs)
   function killPlayer() {
+    if (invulnerable) return;
     player.alive = false;
     gameState = 'lost';
     const levelTag = currentLevelId !== null ? ` (level ${currentLevelId})` : '';
@@ -1210,8 +1368,8 @@ anymore (removed in v0.3.6; see the README for what it used to be).
       xFrac: player.xFx, yFrac: player.yFx,
       alive: player.alive,
     }),
-    getEnemyCount: () => enemies.filter(e => e.alive).length,
-    getEnemyPositions: () => enemies.filter(e => e.alive).map(e => ({ kind: e.kind, col: e.col, row: e.row, x: e.x, y: e.y })),
+    getEnemyCount: () => enemies.length,
+    getEnemyPositions: () => enemies.map(e => ({ kind: e.kind, col: e.col, row: e.row, x: e.x, y: e.y, act: e.act, hasGold: e.hasGold, ox: e.ox, oy: e.oy })),
     getTile: (col, row) => tileAt(col, row),
     digAt: (col, row) => tryDig(col, row),
     setPlayerAt: (col, row) => {
@@ -1236,12 +1394,12 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     // need a deterministic trap/chase scenario rather than waiting on
     // real patrol/fall timing.
     setEnemyAt: (index, col, row) => {
-      const alive = enemies.filter(e => e.alive);
-      const e = alive[index];
+      const e = enemies[index];
       if (!e) return false;
-      e.col = col; e.row = row;
+      e.col = col; e.row = row; e.ox = 0; e.oy = 0;
       e.x = col * TILE + TILE / 2; e.y = row * TILE + TILE / 2;
-      e.inHole = false;
+      e.act = 'stop'; e.inHole = false; e.isFalling = false;
+      if (holeAt(col, row)) { e.act = 'inhole'; e.inHole = true; e.shakeT = 0; if (e.hasGold > 0) guardSpillGold(e, col, row); }
       return true;
     },
     pickupGold: (col, row) => {
@@ -1267,6 +1425,8 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     // Headless play-test hooks (scripts/playtest.py): step the real
     // simulation without drawing, drive the keys, read the grid.
     clearEnemies: () => { enemies = []; },
+    setInvulnerable: (on) => { invulnerable = !!on; },
+    guardDecision: (i) => guardDecide(enemies[i]),
     getPlayerDebug: () => ({ digging: player.digging, isFalling: player.isFalling, onLadder: player.onLadder, isClimbing: player.isClimbing, facing: player.facing }),
     setPitEscape: (on) => { pitEscape = !!on; },
     tick: (dt) => tick(dt),

@@ -351,8 +351,11 @@ def main() -> int:
         page.evaluate(f"window.__loderunner.setEnemyAt(0, {c1}, {r1 + 1})"); page.wait_for_timeout(120)  # trapped, drops it
         page.evaluate(f"window.__loderunner.setEnemyAt(1, {c2}, {r2})"); page.wait_for_timeout(80)     # steals gold 2
         page.evaluate(f"window.__loderunner.setEnemyAt(1, {c1}, {r1 + 1})"); page.wait_for_timeout(150)  # same pit, drops it too
-        assert gold_tiles() == total, f"Both dropped pieces must survive: {gold_tiles()} on board, expected {total}"
-        print("  ✓ two guards dropping gold into one pit loses nothing")
+        # Original rule: a dropped piece lands on the tile above the pit if that is empty; if it isn't
+        # (the first piece is already there) it is lost, and counts as collected so the level stays winnable.
+        got = page.evaluate("window.__loderunner.getGold().collected")
+        assert gold_tiles() + got == total, f"Gold must be conserved: {gold_tiles()} on board + {got} counted, expected {total}"
+        print("  ✓ two guards dropping gold into one pit: nothing becomes uncollectable")
 
         # 13. The way out: hidden ladders don't exist until every piece of gold
         # is collected, then appear and can be climbed out of the top of the

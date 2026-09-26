@@ -64,6 +64,20 @@ Not yet built: shareable-level URLs (the saved level's data would need to round-
 - **v0.3.14: the actual Apple II levels — and a way out.** Level 1 couldn't be finished: with all the gold collected there was no ladder to climb out. In the original, some ladders are **hidden** until every piece of gold is collected, then appear (111 of the 150 levels have one). The levels vendored earlier (from the VGLC corpus) had dropped them — and, it turned out, weren't the Apple II levels at all but a 32×22 variant with different layouts. Now `levels.js` is built by `scripts/build_levels.py` from levels extracted from the Apple II disk image (via [SimonHung/LodeRunner_TotalRecall](https://github.com/SimonHung/LodeRunner_TotalRecall)): the real 150, on the original **28×16** board, with hidden ladders, and **trapdoors** (85 levels) — tiles that look like brick but drop you through. The status line tells you when the ladder has appeared, and a rising chime plays. The editor gained `0` (trapdoor) and `H` (hidden ladder). **Rights note:** as with the sprites, the designs are Doug Smith's/Brøderbund's and that repository states no licence, so neither does this project. Custom levels saved from the 32×22 editor before this are cropped to the new board.
 - Debug hooks: `window.__loderunner.loadLevel(id)` jumps to any level (official or custom) by 1-based id; `setEnemyAt(index, col, row)` and `setPlayerPixelAt(x, y)` exist for deterministic tests; `getHighestCleared()` / `resetProgress()` for saved progress; `enterEditor()`, `editorKey(code)`, `getEditorState()`, `saveEditorLevelAs(name)`, `getCustomLevels()`, `clearCustomLevels()` for the editor.
 
+## What's in v0.5 (real guards)
+
+Guards used to patrol left and right and fall, and never came after you. They now behave like the 1983 guards:
+
+- **They chase.** On your row with a clear run, a guard goes straight for you. Otherwise it looks along its floor for the best ladder to climb or gap to drop through, preferring a spot on your row, then above you, then below you, and heads there. Same rules for ropes, ladders and gaps, so a guard will follow you across the level and down to you through openings.
+- **Speed depends on how many there are.** One guard moves at half your speed; with two, each is half your speed; with more, a little slower each. A level never has more than five guards (extras in the data are dropped, as in the original).
+- **Pits.** A guard that drops into a hole you dug is held for a while (it shakes), then climbs out beside the pit and carries on. If the hole refills while it is inside, it dies and reappears at a random spot near the top. You can run over a trapped guard's head. Guards can stand on each other's heads, and so can you.
+- **Gold.** A guard that walks over gold picks it up, carries it 12-37 steps, then drops it on the next spot with floor under it. Trap it and the gold spills above the pit (if that spot is taken the piece is lost and counts as collected, so the level stays winnable).
+- **Touch one and you are caught** (within three quarters of a tile). A guard stepping next to you early in a dig spoils the dig.
+
+All of this was written from what the original does, not copied from the reference port, and checked against it: `scripts/conform.py --guards` runs the same runner keys through both engines and compares each guard's path. About 98% of random runs on all 150 levels match (the rest are phase differences of a tick or two that flip a guard's choice), and pit timings match on the 41 pit episodes compared.
+
+Levels that were flagged as needing guards (see `PLAYTEST.md`) can now be tried properly.
+
 ## What's in v0.4 (play-testing the 150 levels)
 
 Before restarting the campaign faithfully ("New Game" from level 1 with lives), every level had to be play-tested. That turned out to need two new tools, and they found a lot of places where the engine disagreed with the 1983 game.
@@ -85,7 +99,7 @@ Before restarting the campaign faithfully ("New Game" from level 1 with lives), 
 
 **Results.** `scripts/conform.py` matches the reference on ~99% of random key runs across all 150 levels (same tiles visited), so runner movement is now close to the original. `scripts/playtest.py` (no guards) wins 68 of 150 levels; 13 more (25, 30, 48, 49, 59, 64, 92, 98, 115, 136, 137, 139, 148) are flagged: some gold is unreachable by any route the bot's model allows, most likely because a guard has to carry it out (see below); the other 69 are beyond the bot's planner, not known-broken. Per-level list: `PLAYTEST.md`.
 
-**Guards are the next problem, and they matter for winnability.** The engine's guards patrol horizontally and only fall; they never climb or chase. In the original their chase AI, and their habit of carrying gold to somewhere reachable, is part of solving some levels (level 137 is the clear case: its top corridor is only reachable through a hidden-ladder gap a guard can fall through, so a guard has to carry that gold out; the other flagged levels look similar but are not confirmed one by one). Until guards behave like the originals those levels cannot be completed here. The original's other guard traits (speed tied to the number of guards, dying and respawning at the top, being stepped on) are also missing.
+**Guards were the next problem (fixed in v0.5).** In v0.4 the engine's guards patrolled horizontally and only fell; they never climbed or chased. In the original their chase AI, and their habit of carrying gold to somewhere reachable, is part of solving some levels (level 137 is the clear case: its top corridor is only reachable through a hidden-ladder gap a guard can fall through, so a guard has to carry that gold out; the other flagged levels look similar but are not confirmed one by one). Until v0.5 those levels could not be completed here.
 
 **There is no lives limit** (losing just retries the level), which is what play-testing wants; the faithful five-lives mode will be added later as something you can turn off.
 
@@ -156,7 +170,7 @@ git clone --depth 1 https://github.com/SimonHung/LodeRunner_TotalRecall ~/rookio
 .venv/bin/python scripts/conform.py --ref ~/rookios72/reference/LodeRunner_TotalRecall --levels 1 2 3 --runs 10
 ```
 
-`conform.py` feeds identical random key sequences (no guards) to this game and to the reference port headless, and reports any tile one visited that the other never got near. The reference is the closest thing to the 1983 game's behaviour we can run, so this is how movement bugs were found. It is not vendored (it has no licence); clone it wherever you like.
+`conform.py` feeds identical random key sequences (no guards; `--guards` compares the guards' paths instead) to this game and to the reference port headless, and reports any tile one visited that the other never got near. The reference is the closest thing to the 1983 game's behaviour we can run, so this is how movement bugs were found. It is not vendored (it has no licence); clone it wherever you like.
 
 ## License
 
