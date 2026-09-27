@@ -74,8 +74,12 @@ def runner(p):
     # arms (in front of the body)
     for arm in p["arms"]:
         line(g, [(x, y + dy) for x, y in arm], "r", end="s")
-    if p.get("gun"):
-        put(g, 11, 7 + dy, "k"); put(g, 10, 7 + dy, "k"); put(g, 11, 8 + dy, "k")
+    if p.get("tool"):
+        # A pick, drawn at the reaching arm's own tip so it's clearly an
+        # extension of that arm digging into the ground, not a separate
+        # effect floating near the head.
+        tx, ty = p["arms"][0][-1]
+        put(g, tx + 1, ty + dy, "k"); put(g, tx + 2, ty + 1 + dy, "k")
     return ["".join(r) for r in g]
 
 
@@ -119,8 +123,12 @@ POSES = {
                    legs=[[(5, 10), (4, 12), (5, 14)], [(7, 10), (8, 13), (8, 15)]]),
     "climb1": dict(arms=[[(4, 7), (3, 9), (3, 10)], [(8, 7), (9, 4), (9, 2)]],
                    legs=[[(5, 10), (5, 13), (4, 15)], [(7, 10), (8, 12), (8, 14)]]),
-    "dig": dict(lean=0, arms=[[(6, 7), (8, 8), (10, 8)], [(7, 7), (9, 9), (10, 9)]], gun=True,
-                legs=[[(5, 10), (4, 12), (3, 14)], [(7, 10), (7, 13), (7, 14)]]),
+    # Crouched, reaching an arm down and forward toward the ground so the
+    # tool visibly connects to the diagonal tile being dug, instead of a
+    # standing pose with an effect floating near the head.
+    "dig": dict(lean=0, tool=True,
+                arms=[[(6, 7), (8, 10), (9, 13)], [(7, 7), (6, 5), (5, 3)]],
+                legs=[[(5, 10), (4, 12), (3, 14)], [(7, 10), (8, 12), (9, 14)]]),
     "fall": dict(arms=[[(5, 7), (3, 4), (2, 2)], [(8, 7), (10, 4), (11, 2)]],
                  legs=[[(5, 10), (4, 12), (3, 14)], [(7, 10), (8, 12), (9, 14)]]),
 }
