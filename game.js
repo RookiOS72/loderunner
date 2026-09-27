@@ -1169,12 +1169,14 @@ anymore (removed in v0.3.6; see the README for what it used to be).
 
   // ---------------- HUD ----------------
   const elGold = document.getElementById('gold-count');
+  const elSkin = document.getElementById('skin-name');
   const elStatus = document.getElementById('status');
   const overlay = document.getElementById('overlay');
   const overlayContent = document.getElementById('overlay-content');
 
   function updateHud() {
     elGold.textContent = `GOLD: ${player.goldCollected}/${player.goldTotal}`;
+    elSkin.textContent = `LOOK: ${SKIN_NAMES[skin].toUpperCase()} (K)`;
     elStatus.textContent = (gameState === 'playing' && laddersRevealed())
       ? 'ALL GOLD — CLIMB OUT THE TOP'
       : gameState.toUpperCase();
@@ -1363,6 +1365,7 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     }
     if (e.code === 'KeyK' && gameState !== 'editor') {
       toggleSkin();
+      updateHud();
       if (gameState === 'menu') renderMenuOverlay();
       return;
     }

@@ -36,8 +36,10 @@
       position: relative;
       /* The board is 28x16 tiles (448x256), not square — the stage used to
          be a 1:1 box, which left a dead black band under the level and put
-         the overlay text off-center. */
-      width: min(900px, 96vw, calc(96vh * 28 / 16));
+         the overlay text off-center. It was also capped at 900px, which on
+         most monitors left it looking small with a lot of unused window
+         around it — fill the window instead, however big that is. */
+      width: min(98vw, calc(98vh * 28 / 16));
       aspect-ratio: 28 / 16;
     }
     #game {
@@ -120,6 +122,7 @@
     <canvas id="game" width="448" height="256" aria-label="Lode Runner game canvas"></canvas>
     <div class="hud" id="hud">
       <span id="gold-count">GOLD: 0</span>
+      <span id="skin-name">LOOK: APPLE II</span>
       <span id="status">PLAY</span>
     </div>
     <div class="overlay" id="overlay">
