@@ -868,84 +868,46 @@ anymore (removed in v0.3.6; see the README for what it used to be).
   const canvas = document.getElementById('game');
   const ctx2d = canvas.getContext('2d');
 
-  // Two looks. 'apple2' is the 1983 art (decoded sprites, blue bricks, the
-  // original dig and refill frames); 'nes' is our own drawing in the style of the
-  // 1985 NES version (nothing taken from that game). K switches, and the choice
-  // is remembered.
-  const SKIN_KEY = 'loderunner_skin';
-  let skin = 'apple2';
-  try { const v = localStorage.getItem(SKIN_KEY); if (v === 'nes' || v === 'apple2') skin = v; } catch (err) { /* fine */ }
-  function toggleSkin() {
-    skin = skin === 'apple2' ? 'nes' : 'apple2';
-    try { localStorage.setItem(SKIN_KEY, skin); } catch (err) { /* fine */ }
-  }
-  const SKIN_NAMES = { apple2: 'Apple II (1983)', nes: 'NES style' };
-
-  // Apple II hi-res colours (sprites only use white, orange and blue).
-  const A2 = { w: '#ffffff', o: '#ff6a3c', b: '#14cffd' };
+  // NES-style look: our own drawing in the style of the 1985 NES version
+  // (nothing taken from that game). This replaced the 1983 Apple II look
+  // in v0.7 — see the README for why.
   const PALETTES = {
-    apple2: { player: A2, guard: A2, grunter: { ...A2, o: '#d15dff' } },
-    nes: {
-      player: { h: '#3850f0', s: '#f8b838', r: '#d83010', b: '#2860e8', k: '#7c2c08', d: '#101010' },
-      guard: { w: '#fcfcfc', r: '#d83010', g: '#28b868', k: '#181818' },
-      grunter: { w: '#fcfcfc', r: '#d83010', g: '#a050e0', k: '#181818' },
-    },
+    player: { h: '#3850f0', s: '#f8b838', r: '#d83010', b: '#2860e8', k: '#7c2c08', d: '#101010' },
+    guard: { w: '#fcfcfc', r: '#d83010', g: '#28b868', k: '#181818' },
+    grunter: { w: '#fcfcfc', r: '#d83010', g: '#a050e0', k: '#181818' },
   };
-  // The Apple II board tile is 10 pixels wide by 11 high and shown on a 4:3 screen, which
-  // makes it square; drawn into our 16px tile that is 1.6 x 1.4545 per source pixel.
-  const A2_SX = 1.6, A2_SY = TILE / 11;
-  const NES_TILE = { brick: '#c0500c', brickHi: '#f8b890', brickLo: '#682000', solid: '#5868c8', solidHi: '#98a8f8', solidLo: '#283880' };
+  const TILE_COLOR = { brick: '#c0500c', brickHi: '#f8b890', brickLo: '#682000', solid: '#5868c8', solidHi: '#98a8f8', solidLo: '#283880' };
 
-  const spriteCache = { apple2: {}, nes: {} };
-  const tileCache = { apple2: {} };
+  const spriteCache = {};
   function buildSpriteCache() {
-    const bitmap = (frame, pal, sx, sy, cols) => {
-      const rows = frame.length, w = Math.ceil(cols * sx), h = Math.ceil(rows * sy);
+    const bitmap = (frame, pal, cols) => {
+      const rows = frame.length;
       const cv = document.createElement('canvas');
-      cv.width = w; cv.height = h;
+      cv.width = cols; cv.height = rows;
       const c = cv.getContext('2d');
       for (let j = 0; j < rows; j++) {
-        const y0 = Math.round(j * sy), y1 = Math.round((j + 1) * sy);
         for (let i = 0; i < cols; i++) {
           const ch = frame[j][i];
-          if (ch === '.' || !pal[ch === 'w' || ch === 'o' || ch === 'b' ? ch : ch]) continue;
-          const x0 = Math.round(i * sx), x1 = Math.round((i + 1) * sx);
+          if (ch === '.' || !pal[ch]) continue;
           c.fillStyle = pal[ch];
-          c.fillRect(x0, y0, x1 - x0, y1 - y0);
+          c.fillRect(i, j, 1, 1);
         }
       }
       return cv;
     };
-    const S = window.SPRITES;
-    if (S) {
-      for (const [set, anims] of Object.entries({ player: S.player, guard: S.guard, grunter: S.guard })) {
-        for (const [anim, sides] of Object.entries(anims)) {
-          spriteCache.apple2[set + ':' + anim] = {
-            right: sides.right.map(f => bitmap(f, PALETTES.apple2[set], A2_SX, A2_SY, 14)),
-            left: sides.left.map(f => bitmap(f, PALETTES.apple2[set], A2_SX, A2_SY, 14)),
-          };
-        }
-      }
-      // (The board tile uses only the first 10 of the 14 columns.)
-      for (const [name, frames] of Object.entries(S.tiles || {})) {
-        tileCache.apple2[name] = frames.map(f => bitmap(f, A2, A2_SX, A2_SY, 10));
-      }
-    }
-    const N = window.SPRITES_NES;
-    if (N) {
-      for (const [set, anims] of Object.entries({ player: N.player, guard: N.guard, grunter: N.guard })) {
-        for (const [anim, sides] of Object.entries(anims)) {
-          spriteCache.nes[set + ':' + anim] = {
-            right: sides.right.map(f => bitmap(f, PALETTES.nes[set], 1, 1, 12)),
-            left: sides.left.map(f => bitmap(f, PALETTES.nes[set], 1, 1, 12)),
-          };
-        }
+    const S = window.SPRITES_NES;
+    if (!S) return;
+    for (const [set, anims] of Object.entries({ player: S.player, guard: S.guard, grunter: S.guard })) {
+      for (const [anim, sides] of Object.entries(anims)) {
+        spriteCache[set + ':' + anim] = {
+          right: sides.right.map(f => bitmap(f, PALETTES[set], 12)),
+          left: sides.left.map(f => bitmap(f, PALETTES[set], 12)),
+        };
       }
     }
   }
   function drawSprite(set, anim, idx, facingLeft, cx, cy) {
-    const which = spriteCache[skin][set + ':' + anim] ? skin : 'apple2';
-    const entry = spriteCache[which][set + ':' + anim] || (anim === 'dig' && spriteCache[which][set + ':run']);
+    const entry = spriteCache[set + ':' + anim] || (anim === 'dig' && spriteCache[set + ':run']);
     if (!entry) { // sprites missing — a plain block beats invisibility
       ctx2d.fillStyle = set === 'player' ? '#fff' : '#ff6a3c';
       ctx2d.fillRect(Math.round(cx - 5), Math.round(cy - 6), 10, 14);
@@ -953,45 +915,39 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     }
     const frames = facingLeft ? entry.left : entry.right;
     const img = frames[idx % frames.length];
-    // Bottom-aligned to the tile so feet stay on the floor; the Apple II sprite's
-    // first column sits on the tile's left edge, the NES one is centred.
-    const x = which === 'nes' ? cx - img.width / 2 : cx - TILE / 2;
-    ctx2d.drawImage(img, Math.round(x), Math.round(cy + TILE / 2 - img.height));
-  }
-  function drawTileBitmap(name, idx, x, y) {
-    const fr = tileCache.apple2[name];
-    if (fr) ctx2d.drawImage(fr[idx % fr.length], x, y);
+    // Bottom-aligned to the tile, centred, so feet stay on the floor.
+    ctx2d.drawImage(img, Math.round(cx - img.width / 2), Math.round(cy + TILE / 2 - img.height));
   }
 
   // ---- tiles ----
-  function nesBrick(x, y) {
-    ctx2d.fillStyle = NES_TILE.brick;
+  function drawBrick(x, y) {
+    ctx2d.fillStyle = TILE_COLOR.brick;
     ctx2d.fillRect(x, y, TILE, TILE);
-    ctx2d.fillStyle = NES_TILE.brickHi;                       // mortar, courses of 4px, staggered
+    ctx2d.fillStyle = TILE_COLOR.brickHi;                       // mortar, courses of 4px, staggered
     for (let r = 0; r < 4; r++) {
       ctx2d.fillRect(x, y + r * 4, TILE, 1);
       const off = (r % 2) * 8 + 4;
       ctx2d.fillRect(x + off % TILE, y + r * 4, 1, 4);
     }
-    ctx2d.fillStyle = NES_TILE.brickLo;
+    ctx2d.fillStyle = TILE_COLOR.brickLo;
     ctx2d.fillRect(x, y + TILE - 1, TILE, 1);
   }
-  function nesSolid(x, y) {
-    ctx2d.fillStyle = NES_TILE.solid; ctx2d.fillRect(x, y, TILE, TILE);
-    ctx2d.fillStyle = NES_TILE.solidHi; ctx2d.fillRect(x, y, TILE, 1); ctx2d.fillRect(x, y, 1, TILE);
-    ctx2d.fillStyle = NES_TILE.solidLo; ctx2d.fillRect(x, y + TILE - 1, TILE, 1); ctx2d.fillRect(x + TILE - 1, y, 1, TILE);
+  function drawSolid(x, y) {
+    ctx2d.fillStyle = TILE_COLOR.solid; ctx2d.fillRect(x, y, TILE, TILE);
+    ctx2d.fillStyle = TILE_COLOR.solidHi; ctx2d.fillRect(x, y, TILE, 1); ctx2d.fillRect(x, y, 1, TILE);
+    ctx2d.fillStyle = TILE_COLOR.solidLo; ctx2d.fillRect(x, y + TILE - 1, TILE, 1); ctx2d.fillRect(x + TILE - 1, y, 1, TILE);
   }
-  function nesLadder(x, y) {
+  function drawLadder(x, y) {
     ctx2d.fillStyle = '#e8e8e8'; ctx2d.fillRect(x + 2, y, 2, TILE); ctx2d.fillRect(x + TILE - 4, y, 2, TILE);
     ctx2d.fillStyle = '#787878'; ctx2d.fillRect(x + 3, y, 1, TILE); ctx2d.fillRect(x + TILE - 3, y, 1, TILE);
     ctx2d.fillStyle = '#e8e8e8';
     for (let r = 0; r < 4; r++) ctx2d.fillRect(x + 4, y + r * 4 + 2, TILE - 8, 1);
   }
-  function nesRope(x, y) {
+  function drawRope(x, y) {
     ctx2d.fillStyle = '#f0f0f0'; ctx2d.fillRect(x, y + 2, TILE, 2);
     ctx2d.fillStyle = '#8c8c8c'; ctx2d.fillRect(x, y + 4, TILE, 1);
   }
-  function nesGold(x, y) {
+  function drawGold(x, y) {
     ctx2d.fillStyle = '#a87000'; ctx2d.fillRect(x + 2, y + 13, 12, 2);
     ctx2d.fillStyle = '#f8b800';
     ctx2d.fillRect(x + 3, y + 11, 10, 3); ctx2d.fillRect(x + 5, y + 8, 6, 3); ctx2d.fillRect(x + 7, y + 6, 2, 2);
@@ -1000,9 +956,8 @@ anymore (removed in v0.3.6; see the README for what it used to be).
   }
 
   function renderTile(col, row, t, x, y) {
-    const nes = skin === 'nes';
     if (t === T_BRICK || t === T_TRAP) {   // a trapdoor looks exactly like brick
-      if (nes) nesBrick(x, y); else drawTileBitmap('brick', 0, x, y);
+      drawBrick(x, y);
     } else if (t === T_LADDER || t === T_FREE_LADDER) {
       // Hidden ladders are invisible until all the gold is collected (the
       // editor shows them faintly so you can place them).
@@ -1010,23 +965,22 @@ anymore (removed in v0.3.6; see the README for what it used to be).
       if (hidden && gameState !== 'editor') return;
       ctx2d.save();
       if (hidden) ctx2d.globalAlpha = 0.35;
-      if (nes) nesLadder(x, y); else drawTileBitmap('ladder', 0, x, y);
+      drawLadder(x, y);
       ctx2d.restore();
     } else if (t === T_ROPE) {
-      if (nes) nesRope(x, y); else drawTileBitmap('rope', 0, x, y);
+      drawRope(x, y);
     } else if (t === T_GOLD) {
-      if (nes) nesGold(x, y); else drawTileBitmap('gold', 0, x, y);
+      drawGold(x, y);
     } else if (t === T_SOLID) {
-      if (nes) nesSolid(x, y); else drawTileBitmap('solid', 0, x, y);
+      drawSolid(x, y);
     }
   }
 
   // ---- dig, refill and respawn frames ----
-  // The original digs in 12 steps (a tick each): the brick erodes in 6 stages while dirt
-  // flies above it, and the runner shows the digging pose for the first half. A hole
-  // stays open, then closes in two stages over its last 20 ticks.
+  // The original digs in 12 steps (a tick each): the brick erodes while dirt flies above
+  // it, and the runner shows the digging pose for the first half. A hole stays open, then
+  // closes over its last 20 ticks.
   const DIG_STEPS = 12;
-  const DIG_BRICK_STAGE = [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5];
   const DIG_DEBRIS_STAGE = [0, 0, 1, 1, 2, 2, 3, 3, -1, -1, -1, -1];
   function digStep() {
     if (!player.digging) return -1;
@@ -1042,23 +996,17 @@ anymore (removed in v0.3.6; see the README for what it used to be).
     const x = d.col * TILE, y = d.row * TILE;
     const dir = d.col < player.col ? -1 : 1;
     clearTile(x, y);
-    if (skin === 'nes') {
-      nesBrick(x, y);
-      const f = (step + 1) / DIG_STEPS;                       // a wedge of black eats in from the runner's side
-      ctx2d.fillStyle = '#000';
-      ctx2d.beginPath();
-      const sx = dir < 0 ? x + TILE : x;
-      ctx2d.moveTo(sx, y); ctx2d.lineTo(sx - dir * TILE * f * 1.1, y); ctx2d.lineTo(sx, y + TILE * f);
-      ctx2d.closePath(); ctx2d.fill();
-      const db = DIG_DEBRIS_STAGE[step];
-      if (db >= 0) {                                          // chips falling above the dig
-        ctx2d.fillStyle = NES_TILE.brick;
-        for (let i = 0; i < 3; i++) ctx2d.fillRect(x + 3 + i * 4 + (db % 2), y - TILE + 4 + db * 3 + i, 2, 2);
-      }
-    } else {
-      drawTileBitmap('digBrick', DIG_BRICK_STAGE[step], x, y);
-      const db = DIG_DEBRIS_STAGE[step];
-      if (db >= 0) drawTileBitmap(dir < 0 ? 'debrisLeft' : 'debrisRight', db, x, y - TILE);
+    drawBrick(x, y);
+    const f = (step + 1) / DIG_STEPS;                       // a wedge of black eats in from the runner's side
+    ctx2d.fillStyle = '#000';
+    ctx2d.beginPath();
+    const sx = dir < 0 ? x + TILE : x;
+    ctx2d.moveTo(sx, y); ctx2d.lineTo(sx - dir * TILE * f * 1.1, y); ctx2d.lineTo(sx, y + TILE * f);
+    ctx2d.closePath(); ctx2d.fill();
+    const db = DIG_DEBRIS_STAGE[step];
+    if (db >= 0) {                                          // chips falling above the dig
+      ctx2d.fillStyle = TILE_COLOR.brick;
+      for (let i = 0; i < 3; i++) ctx2d.fillRect(x + 3 + i * 4 + (db % 2), y - TILE + 4 + db * 3 + i, 2, 2);
     }
   }
   function renderHoles() {
@@ -1068,20 +1016,16 @@ anymore (removed in v0.3.6; see the README for what it used to be).
       const x = h.col * TILE, y = h.row * TILE;
       const stage = left <= 10 * 53.333 ? 1 : left <= 20 * 53.333 ? 0 : -1;
       if (stage < 0) continue;
-      if (skin === 'nes') {
-        ctx2d.save(); ctx2d.beginPath(); ctx2d.rect(x, y + TILE - 5 * (stage + 1), TILE, 5 * (stage + 1)); ctx2d.clip();
-        nesBrick(x, y); ctx2d.restore();
-      } else drawTileBitmap('fill', stage, x, y);
+      ctx2d.save(); ctx2d.beginPath(); ctx2d.rect(x, y + TILE - 5 * (stage + 1), TILE, 5 * (stage + 1)); ctx2d.clip();
+      drawBrick(x, y); ctx2d.restore();
     }
   }
   function renderEgg(e) {
     const x = Math.round(e.x - TILE / 2), y = Math.round(e.y - TILE / 2);
     const stage = e.rebornT < REBORN_TICKS / 2 ? 0 : 1;
-    if (skin === 'nes') {
-      ctx2d.fillStyle = '#fcfcfc';
-      ctx2d.fillRect(x + 5, y + TILE - 3 - 3 * stage, 6, 2 + 3 * stage);
-      ctx2d.fillRect(x + 4, y + TILE - 2, 8, 2);
-    } else drawTileBitmap('egg', stage, x, y);
+    ctx2d.fillStyle = '#fcfcfc';
+    ctx2d.fillRect(x + 5, y + TILE - 3 - 3 * stage, 6, 2 + 3 * stage);
+    ctx2d.fillRect(x + 4, y + TILE - 2, 8, 2);
   }
 
   // Which frame of which animation the player is in right now.
@@ -1169,14 +1113,12 @@ anymore (removed in v0.3.6; see the README for what it used to be).
 
   // ---------------- HUD ----------------
   const elGold = document.getElementById('gold-count');
-  const elSkin = document.getElementById('skin-name');
   const elStatus = document.getElementById('status');
   const overlay = document.getElementById('overlay');
   const overlayContent = document.getElementById('overlay-content');
 
   function updateHud() {
     elGold.textContent = `GOLD: ${player.goldCollected}/${player.goldTotal}`;
-    elSkin.textContent = `LOOK: ${SKIN_NAMES[skin].toUpperCase()} (K)`;
     elStatus.textContent = (gameState === 'playing' && laddersRevealed())
       ? 'ALL GOLD — CLIMB OUT THE TOP'
       : gameState.toUpperCase();
@@ -1212,7 +1154,6 @@ anymore (removed in v0.3.6; see the README for what it used to be).
         <span><kbd>&uarr;</kbd> <kbd>&darr;</kbd> Climb</span>
         <span><kbd>Z</kbd> <kbd>X</kbd> Dig</span>
         <span><kbd>M</kbd> Mute</span>
-        <span><kbd>K</kbd> Look: ${SKIN_NAMES[skin]}</span>
         <span><kbd>E</kbd> Level editor</span>
       </p>
       <p class="hints" style="margin-top:1em"><kbd>SPACE</kbd> Start</p>
@@ -1363,12 +1304,6 @@ anymore (removed in v0.3.6; see the README for what it used to be).
       Audio.setMuted(muted);
       return;
     }
-    if (e.code === 'KeyK' && gameState !== 'editor') {
-      toggleSkin();
-      updateHud();
-      if (gameState === 'menu') renderMenuOverlay();
-      return;
-    }
     if (e.code === 'Space') {
       if (gameState === 'menu') {
         // Play whichever level is currently picked in the level-select
@@ -1460,7 +1395,6 @@ anymore (removed in v0.3.6; see the README for what it used to be).
       xFrac: player.xFx, yFrac: player.yFx,
       alive: player.alive,
     }),
-    getSkin: () => skin, setSkin: (v) => { skin = v === 'nes' ? 'nes' : 'apple2'; },
     getEnemyCount: () => enemies.length,
     getEnemyPositions: () => enemies.map(e => ({ kind: e.kind, col: e.col, row: e.row, x: e.x, y: e.y, act: e.act, hasGold: e.hasGold, ox: e.ox, oy: e.oy })),
     getTile: (col, row) => tileAt(col, row),
